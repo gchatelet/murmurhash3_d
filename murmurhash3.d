@@ -1,6 +1,4 @@
-import std.stdio;
 import std.traits : isUnsigned;
-import std.range : chunks, isInputRange, isForwardRange, ElementType;
 
 @safe:
 
@@ -15,8 +13,7 @@ struct Digester(T)
     ubyte[T.blockSize] finish()
     {
         instance.finalize();
-        auto tmp = instance.get();
-        return cast(ubyte[T.blockSize])(tmp);
+        return cast(ubyte[T.blockSize])(instance.get());
     }
 
     void put(scope const(ubyte)[] data...)
@@ -25,67 +22,9 @@ struct Digester(T)
     }
 }
 
-version (unittest)
-{
-    import std.digest.digest;
-    import std.string : representation;
-
-    string digestToHex(T)(string data, uint seed = 0)
-    {
-        return digest!(T)(data).toHexString!(Order.decreasing).idup;
-    }
-}
-
-template bits(T)
-{
-    enum bits = T.sizeof * 8;
-}
-
-T rotl(T)(T x, uint y) if (isUnsigned!T)
-in
-{
-    assert(y >= 0 && y <= bits!T);
-}
-body
-{
-    return ((x << y) | (x >> (bits!T - y)));
-}
-
-T shuffle(T)(T k, T c1, T c2, ubyte r1) if (isUnsigned!T)
-{
-    k *= c1;
-    k = rotl(k, r1);
-    k *= c2;
-    return k;
-}
-
-void update(T)(ref T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
-{
-    h ^= shuffle(k, c1, c2, r1);
-    h = rotl(h, r2);
-    h += mixWith;
-    h = h * 5 + n;
-}
-
-uint fmix(uint h)
-{
-    h ^= h >> 16;
-    h *= 0x85ebca6b;
-    h ^= h >> 13;
-    h *= 0xc2b2ae35;
-    h ^= h >> 16;
-    return h;
-}
-
-ulong fmix(ulong k)
-{
-    k ^= k >> 33;
-    k *= 0xff51afd7ed558ccd;
-    k ^= k >> 33;
-    k *= 0xc4ceb9fe1a85ec53;
-    k ^= k >> 33;
-    return k;
-}
+alias MurmurHash3_x86_32 = Digester!SMurmurHash3_x86_32;
+alias MurmurHash3_x86_128 = Digester!SMurmurHash3_x86_128;
+alias MurmurHash3_x64_128 = Digester!SMurmurHash3_x64_128;
 
 struct SMurmurHash3_x86_32
 {
@@ -142,6 +81,17 @@ public:
     {
         uint[1] tmp = [h1];
         return cast(ubyte[4]) tmp;
+    }
+}
+
+version (unittest)
+{
+    import std.digest.digest;
+    import std.string : representation;
+
+    string digestToHex(T)(string data, uint seed = 0)
+    {
+        return digest!(T)(data).toHexString!(Order.decreasing).idup;
     }
 }
 
@@ -460,18 +410,63 @@ unittest
     assert(toHex("abcdefghijklmnopqrstuvwxyz") == "749C9D7E516F4AA9E9AD9C89B6A7D529");
 }
 
-alias MurmurHash3_x86_32 = Digester!SMurmurHash3_x86_32;
-alias MurmurHash3_x86_128 = Digester!SMurmurHash3_x86_128;
-alias MurmurHash3_x64_128 = Digester!SMurmurHash3_x64_128;
-
-@system void main()
+private:
+template bits(T)
 {
-    import std.stdio : stdin;
-    import std.algorithm : joiner, copy;
-    import std.digest.digest;
-    import std.range : repeat;
-
-    auto stdinRange = stdin.byChunk(64 * 1024);
-    auto oneBillionRange = repeat!ubyte(cast(ubyte) 'a', 1_000_000);
-    writeln(digest!MurmurHash3_x64_128(stdinRange).toHexString!(Order.decreasing)());
+    enum bits = T.sizeof * 8;
 }
+
+T rotl(T)(T x, uint y) if (isUnsigned!T)
+in
+{
+    assert(y >= 0 && y <= bits!T);
+}
+body
+{
+    return ((x << y) | (x >> (bits!T - y)));
+}
+
+T shuffle(T)(T k, T c1, T c2, ubyte r1) if (isUnsigned!T)
+{
+    k *= c1;
+    k = rotl(k, r1);
+    k *= c2;
+    return k;
+}
+
+void update(T)(ref T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
+{
+    h ^= shuffle(k, c1, c2, r1);
+    h = rotl(h, r2);
+    h += mixWith;
+    h = h * 5 + n;
+}
+
+uint fmix(uint h)
+{
+    h ^= h >> 16;
+    h *= 0x85ebca6b;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35;
+    h ^= h >> 16;
+    return h;
+}
+
+ulong fmix(ulong k)
+{
+    k ^= k >> 33;
+    k *= 0xff51afd7ed558ccd;
+    k ^= k >> 33;
+    k *= 0xc4ceb9fe1a85ec53;
+    k ^= k >> 33;
+    return k;
+}
+
+// @system void main()
+// {
+//     import std.stdio : stdin;
+//     import std.digest.digest;
+//
+//     auto stdinRange = stdin.byChunk(64 * 1024);
+//     writeln(digest!MurmurHash3_x64_128(stdinRange).toHexString!(Order.decreasing)());
+// }
