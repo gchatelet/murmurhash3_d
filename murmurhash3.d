@@ -2,34 +2,122 @@ import std.traits : isUnsigned;
 
 @safe:
 
-struct Digester(T)
+alias MurmurHash3_x86_32 = BlockDigester!SMurmurHash3_x86_32;
+alias MurmurHash3_x86_128 = BlockDigester!SMurmurHash3_x86_128;
+alias MurmurHash3_x64_128 = BlockDigester!SMurmurHash3_x64_128;
+
+struct BlockDigester(Hasher)
 {
-    T instance;
+    alias Block = Hasher.Block;
+    enum blockSize = Block.sizeof;
+
+    Hasher hasher;
+    ubyte[blockSize] buffer;
+    size_t bufferSize = 0;
+
     void start()
     {
-        instance = T();
-    }
-
-    ubyte[T.blockSize] finish()
-    {
-        instance.finalize();
-        return cast(ubyte[T.blockSize])(instance.get());
+        this = BlockDigester.init;
     }
 
     void put(scope const(ubyte)[] data...)
     {
-        instance.put(data);
+        // Buffer should never be full while entring this function.
+        assert(bufferSize < blockSize);
+        if (bufferSize > 0)
+        {
+            import std.algorithm.comparison : min;
+            immutable available = blockSize - bufferSize;
+            immutable copySize = min(available, data.length);
+            buffer[bufferSize .. bufferSize + copySize] = data[0 .. copySize];
+            data = data[copySize .. $];
+            bufferSize += copySize;
+        }
+        if (bufferSize == blockSize)
+        {
+            hasher.put(cast(Block) buffer);
+            bufferSize = 0;
+        }
+        for (; data.length >= blockSize; data = data[blockSize .. $])
+        {
+            assert(bufferSize == 0);
+            hasher.put(cast(Block) data[0 .. blockSize]);
+        }
+        assert(data.length < blockSize);
+        if (data.length > 0)
+        {
+            assert(bufferSize == 0);
+            buffer[0 .. data.length] = data[];
+            bufferSize += data.length;
+        }
+    }
+
+    ubyte[blockSize] finish()
+    {
+        auto tail = getRemainder();
+        if (tail.length > 0)
+        {
+            hasher.putTail(tail);
+        }
+        hasher.finalize();
+        return cast(ubyte[blockSize])(hasher.get());
+    }
+
+private:
+    const(ubyte)[] getRemainder()
+    {
+        return buffer[0 .. bufferSize];
     }
 }
 
-alias MurmurHash3_x86_32 = Digester!SMurmurHash3_x86_32;
-alias MurmurHash3_x86_128 = Digester!SMurmurHash3_x86_128;
-alias MurmurHash3_x64_128 = Digester!SMurmurHash3_x64_128;
+unittest
+{
+    struct DummyHasher
+    {
+        alias Block = ubyte[3];
+        Block[] results;
+
+        void put(Block value)
+        {
+            results ~= value;
+        }
+
+        void putTail(scope const(ubyte)[] data...)
+        {
+        }
+
+        void finalize()
+        {
+        }
+
+        Block get()
+        {
+            return Block.init;
+        }
+    }
+
+    auto digester = BlockDigester!DummyHasher();
+    assert(digester.hasher.results == []);
+    assert(digester.getRemainder() == []);
+    digester.put(0);
+    assert(digester.hasher.results == []);
+    assert(digester.getRemainder() == [0]);
+    digester.put(1, 2);
+    assert(digester.hasher.results == [[0, 1, 2]]);
+    assert(digester.getRemainder() == []);
+    digester.put(3, 4, 5, 6);
+    assert(digester.hasher.results == [[0, 1, 2], [3, 4, 5]]);
+    assert(digester.getRemainder() == [6]);
+    digester.put(7, 8, 9, 10, 11);
+    assert(digester.hasher.results == [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]]);
+    assert(digester.getRemainder() == []);
+}
 
 struct SMurmurHash3_x86_32
 {
 private:
-    enum blockSize = uint.sizeof;
+    alias Block = uint[1];
+    enum blockSize = Block.sizeof;
     enum uint c1 = 0xcc9e2d51;
     enum uint c2 = 0x1b873593;
     uint h1;
@@ -44,18 +132,16 @@ private:
 
 public:
 
-    void put(uint value)
+    void put(Block value)
     {
-        update(h1, value, 0, c1, c2, 15, 13, 0xe6546b64);
+        update(h1, value[0], 0, c1, c2, 15, 13, 0xe6546b64);
         size += value.sizeof;
     }
 
-    void put(scope const(ubyte)[] data...)
+    void putTail(scope const(ubyte)[] data...)
     {
-        for (; data.length >= blockSize; data = data[blockSize .. $])
-        {
-            put((cast(const uint[]) data[0 .. blockSize])[0]);
-        }
+        assert(data.length < blockSize);
+        assert(data.length > 0);
         size += data.length;
         uint k1 = 0;
         final switch (data.length & 3)
@@ -77,21 +163,26 @@ public:
         h1 = fmix(h1);
     }
 
-    ubyte[4] get()
+    Block get()
     {
-        uint[1] tmp = [h1];
-        return cast(ubyte[4]) tmp;
+        return [h1];
     }
 }
 
 version (unittest)
 {
     import std.digest.digest;
+
+    @trusted string toHex(const ubyte[] hash)
+    {
+        return toHexString!(Order.decreasing)(hash).idup;
+    }
+
     import std.string : representation;
 
     string digestToHex(T)(string data, uint seed = 0)
     {
-        return digest!(T)(data).toHexString!(Order.decreasing).idup;
+        return digest!(T)(data).toHex();
     }
 }
 
@@ -125,13 +216,18 @@ unittest
     assert(toHex("abcdefghijklmnopqrstuvwx") == "B0F93939");
     assert(toHex("abcdefghijklmnopqrstuvwxy") == "3883561A");
     assert(toHex("abcdefghijklmnopqrstuvwxyz") == "A34E036D");
+
+    auto hasher = MurmurHash3_x86_32();
+    hasher.put(['a', 'b']);
+    hasher.put(['c', 'd']);
+    assert(hasher.finish().toHex() == "43ED676A");
 }
 
 struct SMurmurHash3_x86_128
 {
 private:
-    alias uint4 = uint[4];
-    enum blockSize = uint4.sizeof;
+    alias Block = uint[4];
+    enum blockSize = Block.sizeof;
     enum uint c1 = 0x239b961b;
     enum uint c2 = 0xab0e9789;
     enum uint c3 = 0x38b34ae5;
@@ -155,7 +251,7 @@ private:
 
 public:
 
-    void put(uint4 value)
+    void put(Block value)
     {
         update(h1, value[0], h2, c1, c2, 15, 19, 0x561ccd1b);
         update(h2, value[1], h3, c2, c3, 16, 17, 0x0bcaa747);
@@ -164,12 +260,10 @@ public:
         size += value.sizeof;
     }
 
-    void put(scope const(ubyte)[] data...)
+    void putTail(scope const(ubyte)[] data...)
     {
-        for (; data.length >= blockSize; data = data[blockSize .. $])
-        {
-            put(cast(uint4) data[0 .. blockSize]);
-        }
+        assert(data.length < blockSize);
+        assert(data.length > 0);
         size += data.length;
         uint k1 = 0;
         uint k2 = 0;
@@ -243,7 +337,7 @@ public:
         h4 += h1;
     }
 
-    uint4 get()
+    Block get()
     {
         return [h4, h3, h2, h1];
     }
@@ -279,13 +373,18 @@ unittest
     assert(toHex("abcdefghijklmnopqrstuvwx") == "D7812380378356794971F89101486E32");
     assert(toHex("abcdefghijklmnopqrstuvwxy") == "A519C60A751523304AD7805A42A8FADE");
     assert(toHex("abcdefghijklmnopqrstuvwxyz") == "3E340613666F2F6617F6566E44E33D2C");
+
+    auto hasher = MurmurHash3_x86_128();
+    hasher.put(['a', 'b']);
+    hasher.put(['c', 'd']);
+    assert(hasher.finish().toHex() == "96B6CCAA45AFC62E45AFC62E45AFC62E");
 }
 
 struct SMurmurHash3_x64_128
 {
 private:
-    alias ulong2 = ulong[2];
-    enum blockSize = ulong2.sizeof;
+    alias Block = ulong[2];
+    enum blockSize = Block.sizeof;
     enum ulong c1 = 0x87c37b91114253d5;
     enum ulong c2 = 0x4cf5ad432745937f;
     ulong h2, h1;
@@ -305,19 +404,17 @@ private:
 
 public:
 
-    void put(ulong2 value)
+    void put(Block value)
     {
         update(h1, value[0], h2, c1, c2, 31, 27, 0x52dce729);
         update(h2, value[1], h1, c2, c1, 33, 31, 0x38495ab5);
         size += value.sizeof;
     }
 
-    void put(scope const(ubyte)[] data...)
+    void putTail(scope const(ubyte)[] data...)
     {
-        for (; data.length >= blockSize; data = data[blockSize .. $])
-        {
-            put(cast(ulong2) data[0 .. blockSize]);
-        }
+        assert(data.length < blockSize);
+        assert(data.length > 0);
         size += data.length;
         ulong k1 = 0;
         ulong k2 = 0;
@@ -372,7 +469,7 @@ public:
         h2 += h1;
     }
 
-    ulong2 get()
+    Block get()
     {
         return [h2, h1];
     }
@@ -408,6 +505,11 @@ unittest
     assert(toHex("abcdefghijklmnopqrstuvwx") == "6494960FD4DE2CF7790FCFA35321F208");
     assert(toHex("abcdefghijklmnopqrstuvwxy") == "71E7CBA42F07960FEDEE1581399EBDDB");
     assert(toHex("abcdefghijklmnopqrstuvwxyz") == "749C9D7E516F4AA9E9AD9C89B6A7D529");
+
+    auto hasher = MurmurHash3_x64_128();
+    hasher.put(['a', 'b']);
+    hasher.put(['c', 'd']);
+    assert(hasher.finish().toHex() == "B87BB7D64656CD4FF2003E886073E875");
 }
 
 private:
@@ -416,9 +518,10 @@ template bits(T)
     enum bits = T.sizeof * 8;
 }
 
-T rotl(T)(T x, uint y) if (isUnsigned!T)
+T rotl(T)(T x, uint y)
 in
 {
+    static assert(isUnsigned!T);
     assert(y >= 0 && y <= bits!T);
 }
 body
@@ -426,8 +529,9 @@ body
     return ((x << y) | (x >> (bits!T - y)));
 }
 
-T shuffle(T)(T k, T c1, T c2, ubyte r1) if (isUnsigned!T)
+T shuffle(T)(T k, T c1, T c2, ubyte r1)
 {
+    static assert(isUnsigned!T);
     k *= c1;
     k = rotl(k, r1);
     k *= c2;
@@ -436,6 +540,7 @@ T shuffle(T)(T k, T c1, T c2, ubyte r1) if (isUnsigned!T)
 
 void update(T)(ref T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
 {
+    static assert(isUnsigned!T);
     h ^= shuffle(k, c1, c2, r1);
     h = rotl(h, r2);
     h += mixWith;
@@ -462,11 +567,15 @@ ulong fmix(ulong k)
     return k;
 }
 
-// @system void main()
-// {
-//     import std.stdio : stdin;
-//     import std.digest.digest;
-//
-//     auto stdinRange = stdin.byChunk(64 * 1024);
-//     writeln(digest!MurmurHash3_x64_128(stdinRange).toHexString!(Order.decreasing)());
-// }
+/*@system void main()
+{
+   import std.stdio : stdin, writeln;
+   import std.digest.digest;
+   import std.range : repeat;
+   import std.algorithm : joiner;
+
+   //auto stdinRange = stdin.byChunk(64 * 1024);
+   ubyte[1024] buffer;
+   auto oneGB = repeat(buffer, 5*1024*1024);
+   writeln(digest!MurmurHash3_x64_128(oneGB).toHexString!(Order.decreasing)());
+}*/
