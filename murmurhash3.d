@@ -567,15 +567,63 @@ ulong fmix(ulong k)
     return k;
 }
 
-/*@system void main()
+@system void main()
 {
    import std.stdio : stdin, writeln;
    import std.digest.digest;
-   import std.range : repeat;
+   import std.range : repeat, iota;
    import std.algorithm : joiner;
 
    //auto stdinRange = stdin.byChunk(64 * 1024);
-   ubyte[1024] buffer;
-   auto oneGB = repeat(buffer, 5*1024*1024);
-   writeln(digest!MurmurHash3_x64_128(oneGB).toHexString!(Order.decreasing)());
-}*/
+//    ubyte[1024] buffer;
+//    auto oneGB = repeat(buffer, 5*1024*1024);
+//    writeln(digest!MurmurHash3_x64_128(oneGB).toHexString!(Order.decreasing)());
+
+   enum _1M = 1024*1024UL;
+   enum _1G = 1024*_1M;
+   ubyte[] buffer = new ubyte[_1G];
+   alias ulong2 = ulong[2];
+   ulong2[] ulong_buffer = new ulong2[_1G/ulong2.sizeof];
+
+   // Thoughput: 3.98248 GiB/s
+   auto useLong2 = () {
+    SMurmurHash3_x64_128 hasher;
+    foreach(value; ulong_buffer) {
+      hasher.put(value);
+    }
+    hasher.finalize();
+    writeln(cast(ubyte[16])hasher.get());
+   };
+
+   // Thoughput: 3.93391 GiB/s
+   auto useByteArrayAsLong2 = () {
+    SMurmurHash3_x64_128 hasher;
+    foreach(value; cast(ulong[2][])buffer) {
+      hasher.put(value);
+    }
+    hasher.finalize();
+    writeln(cast(ubyte[16])hasher.get());
+   };
+
+   // Thoughput: 3.49528 GiB/s
+   auto useDigester = () {
+    MurmurHash3_x64_128 hasher;
+    hasher.put(buffer);
+    writeln(hasher.finish());
+   };
+
+   // Thoughput: 1.62575 GiB/s
+   auto useDigestAPI = () {
+    MurmurHash3_x64_128 hasher;
+    hasher.put(buffer);
+    writeln(digest!MurmurHash3_x64_128(buffer));
+   };
+
+   import std.datetime : benchmark;
+   enum times = 10;
+   foreach(result; benchmark!(useDigestAPI, useDigester, useByteArrayAsLong2, useLong2)(times)) {
+    writeln("Thoughput: ", times * 1000. / result.msecs, " GiB/s");
+   }
+}
+
+
