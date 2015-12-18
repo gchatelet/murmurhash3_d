@@ -35,14 +35,12 @@ struct BlockDigester(Hasher)
         }
         if (bufferSize == blockSize)
         {
-            hasher.put(cast(Block) buffer);
+            hasher.put(cast(Block[1]) buffer);
             bufferSize = 0;
         }
-        for (; data.length >= blockSize; data = data[blockSize .. $])
-        {
-            assert(bufferSize == 0);
-            hasher.put(cast(Block) data[0 .. blockSize]);
-        }
+        immutable consecutiveBlocksSize = alignDownTo(data.length);
+        hasher.put(cast(const(Block)[]) data[0 .. consecutiveBlocksSize]);
+        data = data[consecutiveBlocksSize .. $];
         assert(data.length < blockSize);
         if (data.length > 0)
         {
@@ -68,6 +66,10 @@ private:
     {
         return buffer[0 .. bufferSize];
     }
+
+    size_t alignDownTo(size_t size) const {
+      return size & ~(blockSize - 1UL);
+    }
 }
 
 unittest
@@ -75,9 +77,9 @@ unittest
     struct DummyHasher
     {
         alias Block = ubyte[3];
-        Block[] results;
+        const (Block)[] results;
 
-        void put(Block value)
+        void put(const (Block)[] value)
         {
             results ~= value;
         }
@@ -132,10 +134,12 @@ private:
 
 public:
 
-    void put(Block value)
+    void put(const (Block)[] blocks)
     {
-        update(h1, value[0], 0, c1, c2, 15, 13, 0xe6546b64);
-        size += value.sizeof;
+        foreach(block; blocks) {
+          update(h1, block[0], 0, c1, c2, 15, 13, 0xe6546b64);
+        }
+        size += blocks.length * Block.sizeof;
     }
 
     void putTail(scope const(ubyte)[] data...)
@@ -251,13 +255,15 @@ private:
 
 public:
 
-    void put(Block value)
+    void put(const (Block)[] blocks)
     {
-        update(h1, value[0], h2, c1, c2, 15, 19, 0x561ccd1b);
-        update(h2, value[1], h3, c2, c3, 16, 17, 0x0bcaa747);
-        update(h3, value[2], h4, c3, c4, 17, 15, 0x96cd1c35);
-        update(h4, value[3], h1, c4, c1, 18, 13, 0x32ac3b17);
-        size += value.sizeof;
+        foreach(block; blocks) {
+          update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
+          update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747);
+          update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35);
+          update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
+        }
+        size += blocks.length * Block.sizeof;
     }
 
     void putTail(scope const(ubyte)[] data...)
@@ -404,11 +410,13 @@ private:
 
 public:
 
-    void put(Block value)
+    void put(const (Block)[] blocks)
     {
-        update(h1, value[0], h2, c1, c2, 31, 27, 0x52dce729);
-        update(h2, value[1], h1, c2, c1, 33, 31, 0x38495ab5);
-        size += value.sizeof;
+        foreach(block; blocks) {
+          update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
+          update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
+        }
+        size += blocks.length * Block.sizeof;
     }
 
     void putTail(scope const(ubyte)[] data...)
@@ -585,37 +593,31 @@ ulong fmix(ulong k)
    alias ulong2 = ulong[2];
    ulong2[] ulong_buffer = new ulong2[_1G/ulong2.sizeof];
 
-   // Thoughput: 3.98248 GiB/s
+   // Thoughput: 3.96 GiB/s
    auto useLong2 = () {
     SMurmurHash3_x64_128 hasher;
-    foreach(value; ulong_buffer) {
-      hasher.put(value);
-    }
+    hasher.put(ulong_buffer);
     hasher.finalize();
     writeln(cast(ubyte[16])hasher.get());
    };
 
-   // Thoughput: 3.93391 GiB/s
+   // Thoughput: 3.96 GiB/s
    auto useByteArrayAsLong2 = () {
     SMurmurHash3_x64_128 hasher;
-    foreach(value; cast(ulong[2][])buffer) {
-      hasher.put(value);
-    }
+    hasher.put(cast(const (ulong[2])[])buffer);
     hasher.finalize();
     writeln(cast(ubyte[16])hasher.get());
    };
 
-   // Thoughput: 3.49528 GiB/s
+   // Thoughput: 3.78 GiB/s
    auto useDigester = () {
     MurmurHash3_x64_128 hasher;
     hasher.put(buffer);
     writeln(hasher.finish());
    };
 
-   // Thoughput: 1.62575 GiB/s
+   // Thoughput: 3.78 GiB/s
    auto useDigestAPI = () {
-    MurmurHash3_x64_128 hasher;
-    hasher.put(buffer);
     writeln(digest!MurmurHash3_x64_128(buffer));
    };
 
