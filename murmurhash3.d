@@ -27,6 +27,7 @@ struct BlockDigester(Hasher)
         if (bufferSize > 0)
         {
             import std.algorithm.comparison : min;
+
             immutable available = blockSize - bufferSize;
             immutable copySize = min(available, data.length);
             buffer[bufferSize .. bufferSize + copySize] = data[0 .. copySize];
@@ -67,8 +68,15 @@ private:
         return buffer[0 .. bufferSize];
     }
 
-    size_t alignDownTo(size_t size) const {
-      return size & ~(blockSize - 1UL);
+    size_t alignDownTo(size_t size) const
+    {
+        static assert(isPowerOf2(blockSize));
+        return size & ~(blockSize - 1UL);
+    }
+
+    static bool isPowerOf2(uint x) @nogc
+    {
+        return (x & -x) > (x - 1);
     }
 }
 
@@ -76,10 +84,10 @@ unittest
 {
     struct DummyHasher
     {
-        alias Block = ubyte[3];
-        const (Block)[] results;
+        alias Block = ubyte[2];
+        const(Block)[] results;
 
-        void put(const (Block)[] value)
+        void put(const(Block)[] value)
         {
             results ~= value;
         }
@@ -105,13 +113,13 @@ unittest
     assert(digester.hasher.results == []);
     assert(digester.getRemainder() == [0]);
     digester.put(1, 2);
-    assert(digester.hasher.results == [[0, 1, 2]]);
-    assert(digester.getRemainder() == []);
+    assert(digester.hasher.results == [[0, 1]]);
+    assert(digester.getRemainder() == [2]);
     digester.put(3, 4, 5, 6);
-    assert(digester.hasher.results == [[0, 1, 2], [3, 4, 5]]);
+    assert(digester.hasher.results == [[0, 1], [2, 3], [4, 5]]);
     assert(digester.getRemainder() == [6]);
-    digester.put(7, 8, 9, 10, 11);
-    assert(digester.hasher.results == [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]]);
+    digester.put(7);
+    assert(digester.hasher.results == [[0, 1], [2, 3], [4, 5], [6, 7]]);
     assert(digester.getRemainder() == []);
 }
 
@@ -134,10 +142,11 @@ private:
 
 public:
 
-    void put(const (Block)[] blocks)
+    void put(const(Block)[] blocks)
     {
-        foreach(block; blocks) {
-          update(h1, block[0], 0, c1, c2, 15, 13, 0xe6546b64);
+        foreach (block; blocks)
+        {
+            update(h1, block[0], 0, c1, c2, 15, 13, 0xe6546b64);
         }
         size += blocks.length * Block.sizeof;
     }
@@ -255,13 +264,14 @@ private:
 
 public:
 
-    void put(const (Block)[] blocks)
+    void put(const(Block)[] blocks)
     {
-        foreach(block; blocks) {
-          update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
-          update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747);
-          update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35);
-          update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
+        foreach (block; blocks)
+        {
+            update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
+            update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747);
+            update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35);
+            update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
         }
         size += blocks.length * Block.sizeof;
     }
@@ -410,11 +420,12 @@ private:
 
 public:
 
-    void put(const (Block)[] blocks)
+    void put(const(Block)[] blocks)
     {
-        foreach(block; blocks) {
-          update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
-          update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
+        foreach (block; blocks)
+        {
+            update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
+            update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
         }
         size += blocks.length * Block.sizeof;
     }
@@ -577,55 +588,53 @@ ulong fmix(ulong k)
 
 @system void main()
 {
-   import std.stdio : stdin, writeln;
-   import std.digest.digest;
-   import std.range : repeat, iota;
-   import std.algorithm : joiner;
+    import std.stdio : stdin, writeln;
+    import std.digest.digest;
+    import std.range : repeat, iota;
+    import std.algorithm : joiner;
 
-   //auto stdinRange = stdin.byChunk(64 * 1024);
-//    ubyte[1024] buffer;
-//    auto oneGB = repeat(buffer, 5*1024*1024);
-//    writeln(digest!MurmurHash3_x64_128(oneGB).toHexString!(Order.decreasing)());
+    //auto stdinRange = stdin.byChunk(64 * 1024);
+    //    ubyte[1024] buffer;
+    //    auto oneGB = repeat(buffer, 5*1024*1024);
+    //    writeln(digest!MurmurHash3_x64_128(oneGB).toHexString!(Order.decreasing)());
 
-   enum _1M = 1024*1024UL;
-   enum _1G = 1024*_1M;
-   ubyte[] buffer = new ubyte[_1G];
-   alias ulong2 = ulong[2];
-   ulong2[] ulong_buffer = new ulong2[_1G/ulong2.sizeof];
+    enum _1M = 1024 * 1024UL;
+    enum _1G = 1024 * _1M;
+    ubyte[] buffer = new ubyte[_1G];
+    alias ulong2 = ulong[2];
+    ulong2[] ulong_buffer = new ulong2[_1G / ulong2.sizeof];
 
-   // Thoughput: 3.96 GiB/s
-   auto useLong2 = () {
-    SMurmurHash3_x64_128 hasher;
-    hasher.put(ulong_buffer);
-    hasher.finalize();
-    writeln(cast(ubyte[16])hasher.get());
-   };
+    // Thoughput: 3.96 GiB/s
+    auto useLong2 = () {
+        SMurmurHash3_x64_128 hasher;
+        hasher.put(ulong_buffer);
+        hasher.finalize();
+        writeln(cast(ubyte[16]) hasher.get());
+    };
 
-   // Thoughput: 3.96 GiB/s
-   auto useByteArrayAsLong2 = () {
-    SMurmurHash3_x64_128 hasher;
-    hasher.put(cast(const (ulong[2])[])buffer);
-    hasher.finalize();
-    writeln(cast(ubyte[16])hasher.get());
-   };
+    // Thoughput: 3.96 GiB/s
+    auto useByteArrayAsLong2 = () {
+        SMurmurHash3_x64_128 hasher;
+        hasher.put(cast(const(ulong[2])[]) buffer);
+        hasher.finalize();
+        writeln(cast(ubyte[16]) hasher.get());
+    };
 
-   // Thoughput: 3.78 GiB/s
-   auto useDigester = () {
-    MurmurHash3_x64_128 hasher;
-    hasher.put(buffer);
-    writeln(hasher.finish());
-   };
+    // Thoughput: 3.78 GiB/s
+    auto useDigester = () {
+        MurmurHash3_x64_128 hasher;
+        hasher.put(buffer);
+        writeln(hasher.finish());
+    };
 
-   // Thoughput: 3.78 GiB/s
-   auto useDigestAPI = () {
-    writeln(digest!MurmurHash3_x64_128(buffer));
-   };
+    // Thoughput: 3.78 GiB/s
+    auto useDigestAPI = () { writeln(digest!MurmurHash3_x64_128(buffer)); };
 
-   import std.datetime : benchmark;
-   enum times = 10;
-   foreach(result; benchmark!(useDigestAPI, useDigester, useByteArrayAsLong2, useLong2)(times)) {
-    writeln("Thoughput: ", times * 1000. / result.msecs, " GiB/s");
-   }
+    import std.datetime : benchmark;
+
+    enum times = 10;
+    foreach (result; benchmark!(useDigestAPI, useDigester, useByteArrayAsLong2, useLong2)(times))
+    {
+        writeln("Thoughput: ", times * 1000. / result.msecs, " GiB/s");
+    }
 }
-
-
