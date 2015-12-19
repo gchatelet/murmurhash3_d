@@ -1,12 +1,40 @@
-import std.traits : isUnsigned;
+/**
+Computes MurmurHash3 hashes of arbitrary data. MurmurHash is a non-cryptographic
+hash function suitable for general hash-based lookup.
+
+MurmurHash3 yields a 32-bit or 128-bit hash value.
+
+This module conforms to the APIs defined in $(D std.digest.digest).
+To understand the differences between the template and the OOP API, see $(D std.digest.digest).
+
+This module publicly imports $(D std.digest.digest) and can be used as a stand-alone module.
+
+License:   $(WEB www.boost.org/LICENSE_1_0.txt, Boost License 1.0).
+CTFE: Digests do not work in CTFE
+Authors: Guillaume Chatelet $(BR)
+References:
+  $(LINK2 https://code.google.com/p/smhasher/wiki/MurmurHash3, reference implementation)
+  $(LINK2 https://en.wikipedia.org/wiki/MurmurHash, Wikipedia on MurmurHash)
+*/
+
+public import std.digest.digest;
 
 @safe:
 
-alias MurmurHash3_x86_32 = BlockDigester!SMurmurHash3_x86_32;
-alias MurmurHash3_x86_128 = BlockDigester!SMurmurHash3_x86_128;
-alias MurmurHash3_x64_128 = BlockDigester!SMurmurHash3_x64_128;
+alias MurmurHash3_x86_32 = Piecewise!SMurmurHash3_x86_32;
+alias MurmurHash3_x86_128 = Piecewise!SMurmurHash3_x86_128;
+alias MurmurHash3_x64_128 = Piecewise!SMurmurHash3_x64_128;
 
-struct BlockDigester(Hasher)
+alias MurmurHash3_x86_32Digest = WrapperDigest!MurmurHash3_x86_32;
+alias MurmurHash3_x86_128Digest = WrapperDigest!MurmurHash3_x86_128;
+alias MurmurHash3_x64_128Digest = WrapperDigest!MurmurHash3_x64_128;
+
+/**
+MurmurHash3 cannot put chunks smaller than blockSize at a time. This struct
+stores remainder bytes in a buffer and pushes as soon as a block is complete or
+during finalization.
+*/
+struct Piecewise(Hasher)
 {
     alias Block = Hasher.Block;
     enum blockSize = Block.sizeof;
@@ -17,13 +45,14 @@ struct BlockDigester(Hasher)
 
     void start()
     {
-        this = BlockDigester.init;
+        this = Piecewise.init;
     }
 
-    void put(scope const(ubyte)[] data...)
+    void put(scope const(ubyte)[] data...) pure nothrow
     {
         // Buffer should never be full while entring this function.
         assert(bufferSize < blockSize);
+        // Complete left over from last call if any.
         if (bufferSize > 0)
         {
             import std.algorithm.comparison : min;
@@ -34,13 +63,16 @@ struct BlockDigester(Hasher)
             data = data[copySize .. $];
             bufferSize += copySize;
         }
+        // Push left over if it reached the size of a block.
         if (bufferSize == blockSize)
         {
-            hasher.put(cast(Block[1]) buffer);
+            hasher.putBlocks(cast(Block[1]) buffer);
             bufferSize = 0;
         }
+        // Pushing as many consecutive blocks as possible.
         immutable consecutiveBlocksSize = alignDownTo(data.length);
-        hasher.put(cast(const(Block)[]) data[0 .. consecutiveBlocksSize]);
+        hasher.putBlocks(cast(const(Block)[]) data[0 .. consecutiveBlocksSize]);
+        // Adding remainder to temporary buffer.
         data = data[consecutiveBlocksSize .. $];
         assert(data.length < blockSize);
         if (data.length > 0)
@@ -51,12 +83,12 @@ struct BlockDigester(Hasher)
         }
     }
 
-    ubyte[blockSize] finish()
+    ubyte[blockSize] finish() pure nothrow
     {
         auto tail = getRemainder();
         if (tail.length > 0)
         {
-            hasher.putTail(tail);
+            hasher.putRemainder(tail);
         }
         hasher.finalize();
         return cast(ubyte[blockSize])(hasher.get());
@@ -87,26 +119,26 @@ unittest
         alias Block = ubyte[2];
         const(Block)[] results;
 
-        void put(const(Block)[] value)
+        void putBlocks(const(Block)[] value) pure nothrow
         {
             results ~= value;
         }
 
-        void putTail(scope const(ubyte)[] data...)
+        void putRemainder(scope const(ubyte)[] data...) pure nothrow
         {
         }
 
-        void finalize()
+        void finalize() pure nothrow
         {
         }
 
-        Block get()
+        Block get() pure nothrow
         {
             return Block.init;
         }
     }
 
-    auto digester = BlockDigester!DummyHasher();
+    auto digester = Piecewise!DummyHasher();
     assert(digester.hasher.results == []);
     assert(digester.getRemainder() == []);
     digester.put(0);
@@ -115,14 +147,19 @@ unittest
     digester.put(1, 2);
     assert(digester.hasher.results == [[0, 1]]);
     assert(digester.getRemainder() == [2]);
-    digester.put(3, 4, 5, 6);
+    digester.put(3, 4, 5);
     assert(digester.hasher.results == [[0, 1], [2, 3], [4, 5]]);
-    assert(digester.getRemainder() == [6]);
-    digester.put(7);
-    assert(digester.hasher.results == [[0, 1], [2, 3], [4, 5], [6, 7]]);
     assert(digester.getRemainder() == []);
 }
 
+/**
+MurmurHash3 implementation for x86 processors producing a 32 bits value.
+
+This is a lower level implementation that makes finalization optional and have
+slightly better performance.
+Note that putRemainder can be called only once and that no subsequent calls to
+putBlocks is allowed.
+*/
 struct SMurmurHash3_x86_32
 {
 private:
@@ -142,7 +179,7 @@ private:
 
 public:
 
-    void put(const(Block)[] blocks)
+    void putBlocks(const(Block)[] blocks) pure nothrow @nogc
     {
         foreach (block; blocks)
         {
@@ -151,7 +188,7 @@ public:
         size += blocks.length * Block.sizeof;
     }
 
-    void putTail(scope const(ubyte)[] data...)
+    void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
     {
         assert(data.length < blockSize);
         assert(data.length > 0);
@@ -170,13 +207,13 @@ public:
         }
     }
 
-    void finalize()
+    void finalize() pure nothrow @nogc
     {
         h1 ^= size;
         h1 = fmix(h1);
     }
 
-    Block get()
+    Block get() pure nothrow @nogc
     {
         return [h1];
     }
@@ -186,7 +223,7 @@ version (unittest)
 {
     import std.digest.digest;
 
-    @trusted string toHex(const ubyte[] hash)
+    @trusted string toHex(const (ubyte)[] hash)
     {
         return toHexString!(Order.decreasing)(hash).idup;
     }
@@ -236,6 +273,14 @@ unittest
     assert(hasher.finish().toHex() == "43ED676A");
 }
 
+/**
+MurmurHash3 implementation for x86 processors producing a 128 bits value.
+
+This is a lower level implementation that makes finalization optional and have
+slightly better performance.
+Note that putRemainder can be called only once and that no subsequent calls to
+putBlocks is allowed.
+*/
 struct SMurmurHash3_x86_128
 {
 private:
@@ -264,7 +309,7 @@ private:
 
 public:
 
-    void put(const(Block)[] blocks)
+    void putBlocks(const(Block)[] blocks) pure nothrow @nogc
     {
         foreach (block; blocks)
         {
@@ -276,7 +321,7 @@ public:
         size += blocks.length * Block.sizeof;
     }
 
-    void putTail(scope const(ubyte)[] data...)
+    void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
     {
         assert(data.length < blockSize);
         assert(data.length > 0);
@@ -326,7 +371,7 @@ public:
         }
     }
 
-    void finalize()
+    void finalize() pure nothrow @nogc
     {
         h1 ^= size;
         h2 ^= size;
@@ -353,7 +398,7 @@ public:
         h4 += h1;
     }
 
-    Block get()
+    Block get() pure nothrow @nogc
     {
         return [h4, h3, h2, h1];
     }
@@ -396,6 +441,14 @@ unittest
     assert(hasher.finish().toHex() == "96B6CCAA45AFC62E45AFC62E45AFC62E");
 }
 
+/**
+MurmurHash3 implementation for x86_64 processors producing a 128 bits value.
+
+This is a lower level implementation that makes finalization optional and have
+slightly better performance.
+Note that putRemainder can be called only once and that no subsequent calls to
+putBlocks is allowed.
+*/
 struct SMurmurHash3_x64_128
 {
 private:
@@ -420,7 +473,7 @@ private:
 
 public:
 
-    void put(const(Block)[] blocks)
+    void putBlocks(const(Block)[] blocks) pure nothrow @nogc
     {
         foreach (block; blocks)
         {
@@ -430,7 +483,7 @@ public:
         size += blocks.length * Block.sizeof;
     }
 
-    void putTail(scope const(ubyte)[] data...)
+    void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
     {
         assert(data.length < blockSize);
         assert(data.length > 0);
@@ -475,7 +528,7 @@ public:
         };
     }
 
-    void finalize()
+    void finalize() pure nothrow @nogc
     {
         h1 ^= size;
         h2 ^= size;
@@ -488,7 +541,7 @@ public:
         h2 += h1;
     }
 
-    Block get()
+    Block get() pure nothrow @nogc
     {
         return [h2, h1];
     }
@@ -540,6 +593,7 @@ template bits(T)
 T rotl(T)(T x, uint y)
 in
 {
+    import std.traits : isUnsigned;
     static assert(isUnsigned!T);
     assert(y >= 0 && y <= bits!T);
 }
@@ -550,6 +604,7 @@ body
 
 T shuffle(T)(T k, T c1, T c2, ubyte r1)
 {
+    import std.traits : isUnsigned;
     static assert(isUnsigned!T);
     k *= c1;
     k = rotl(k, r1);
@@ -559,6 +614,7 @@ T shuffle(T)(T k, T c1, T c2, ubyte r1)
 
 void update(T)(ref T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
 {
+    import std.traits : isUnsigned;
     static assert(isUnsigned!T);
     h ^= shuffle(k, c1, c2, r1);
     h = rotl(h, r2);
@@ -566,7 +622,7 @@ void update(T)(ref T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
     h = h * 5 + n;
 }
 
-uint fmix(uint h)
+uint fmix(uint h) pure nothrow @nogc
 {
     h ^= h >> 16;
     h *= 0x85ebca6b;
@@ -576,7 +632,7 @@ uint fmix(uint h)
     return h;
 }
 
-ulong fmix(ulong k)
+ulong fmix(ulong k) pure nothrow @nogc
 {
     k ^= k >> 33;
     k *= 0xff51afd7ed558ccd;
@@ -585,7 +641,7 @@ ulong fmix(ulong k)
     k ^= k >> 33;
     return k;
 }
-
+/*
 @system void main()
 {
     import std.stdio : stdin, writeln;
@@ -637,4 +693,4 @@ ulong fmix(ulong k)
     {
         writeln("Thoughput: ", times * 1000. / result.msecs, " GiB/s");
     }
-}
+}*/
