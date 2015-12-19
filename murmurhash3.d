@@ -31,8 +31,8 @@ alias MurmurHash3_x64_128Digest = WrapperDigest!MurmurHash3_x64_128;
 
 /**
 MurmurHash3 cannot put chunks smaller than blockSize at a time. This struct
-stores remainder bytes in a buffer and pushes as soon as a block is complete or
-during finalization.
+stores remainder bytes in a buffer and pushes it as soon as the  block is
+complete or during finalization.
 */
 struct Piecewise(Hasher)
 {
@@ -221,8 +221,6 @@ public:
 
 version (unittest)
 {
-    import std.digest.digest;
-
     @trusted string toHex(const (ubyte)[] hash)
     {
         return toHexString!(Order.decreasing)(hash).idup;
