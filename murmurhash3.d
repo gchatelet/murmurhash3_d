@@ -30,17 +30,18 @@ alias MurmurHash3_x86_128Digest = WrapperDigest!MurmurHash3_x86_128;
 alias MurmurHash3_x64_128Digest = WrapperDigest!MurmurHash3_x64_128;
 
 /**
-MurmurHash3 cannot put chunks smaller than blockSize at a time. This struct
-stores remainder bytes in a buffer and pushes it as soon as the  block is
+MurmurHash3 cannot put chunks smaller than blockSizeInBytes at a time. This
+struct stores remainder bytes in a buffer and pushes it as soon as the  block is
 complete or during finalization.
 */
 struct Piecewise(Hasher)
 {
     alias Block = Hasher.Block;
-    enum blockSize = Block.sizeof;
+    enum blockSizeInBytes = Block.sizeof;
+    enum blockSize = blockSizeInBytes * ubyte.sizeof;
 
     Hasher hasher;
-    ubyte[blockSize] buffer;
+    ubyte[blockSizeInBytes] buffer;
     size_t bufferSize = 0;
 
     void start()
@@ -51,30 +52,30 @@ struct Piecewise(Hasher)
     void put(scope const(ubyte)[] data...) pure nothrow
     {
         // Buffer should never be full while entring this function.
-        assert(bufferSize < blockSize);
+        assert(bufferSize < blockSizeInBytes);
         // Complete left over from last call if any.
         if (bufferSize > 0)
         {
             import std.algorithm.comparison : min;
 
-            immutable available = blockSize - bufferSize;
+            immutable available = blockSizeInBytes - bufferSize;
             immutable copySize = min(available, data.length);
             buffer[bufferSize .. bufferSize + copySize] = data[0 .. copySize];
             data = data[copySize .. $];
             bufferSize += copySize;
         }
         // Push left over if it reached the size of a block.
-        if (bufferSize == blockSize)
+        if (bufferSize == blockSizeInBytes)
         {
             hasher.putBlocks(cast(Block[1]) buffer);
             bufferSize = 0;
         }
         // Pushing as many consecutive blocks as possible.
-        immutable consecutiveBlocksSize = alignDownTo(data.length);
-        hasher.putBlocks(cast(const(Block)[]) data[0 .. consecutiveBlocksSize]);
+        immutable consecutiveBlocks = alignDownTo(data.length);
+        hasher.putBlocks(cast(const(Block)[]) data[0 .. consecutiveBlocks]);
         // Adding remainder to temporary buffer.
-        data = data[consecutiveBlocksSize .. $];
-        assert(data.length < blockSize);
+        data = data[consecutiveBlocks .. $];
+        assert(data.length < blockSizeInBytes);
         if (data.length > 0)
         {
             assert(bufferSize == 0);
@@ -83,7 +84,7 @@ struct Piecewise(Hasher)
         }
     }
 
-    ubyte[blockSize] finish() pure nothrow
+    ubyte[blockSizeInBytes] finish() pure nothrow
     {
         auto tail = getRemainder();
         if (tail.length > 0)
@@ -91,7 +92,7 @@ struct Piecewise(Hasher)
             hasher.putRemainder(tail);
         }
         hasher.finalize();
-        return cast(ubyte[blockSize])(hasher.get());
+        return cast(ubyte[blockSizeInBytes])(hasher.get());
     }
 
 private:
@@ -110,6 +111,7 @@ private:
     {
         return (x & -x) > (x - 1);
     }
+
 }
 
 unittest
@@ -164,7 +166,7 @@ struct SMurmurHash3_x86_32
 {
 private:
     alias Block = uint[1];
-    enum blockSize = Block.sizeof;
+    enum blockSizeInBytes = Block.sizeof;
     enum uint c1 = 0xcc9e2d51;
     enum uint c2 = 0x1b873593;
     uint h1;
@@ -190,7 +192,7 @@ public:
 
     void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
     {
-        assert(data.length < blockSize);
+        assert(data.length < blockSizeInBytes);
         assert(data.length > 0);
         size += data.length;
         uint k1 = 0;
@@ -221,7 +223,7 @@ public:
 
 version (unittest)
 {
-    @trusted string toHex(const (ubyte)[] hash)
+    @trusted string toHex(const(ubyte)[] hash)
     {
         return toHexString!(Order.decreasing)(hash).idup;
     }
@@ -283,7 +285,7 @@ struct SMurmurHash3_x86_128
 {
 private:
     alias Block = uint[4];
-    enum blockSize = Block.sizeof;
+    enum blockSizeInBytes = Block.sizeof;
     enum uint c1 = 0x239b961b;
     enum uint c2 = 0xab0e9789;
     enum uint c3 = 0x38b34ae5;
@@ -321,7 +323,7 @@ public:
 
     void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
     {
-        assert(data.length < blockSize);
+        assert(data.length < blockSizeInBytes);
         assert(data.length > 0);
         size += data.length;
         uint k1 = 0;
@@ -451,7 +453,7 @@ struct SMurmurHash3_x64_128
 {
 private:
     alias Block = ulong[2];
-    enum blockSize = Block.sizeof;
+    enum blockSizeInBytes = Block.sizeof;
     enum ulong c1 = 0x87c37b91114253d5;
     enum ulong c2 = 0x4cf5ad432745937f;
     ulong h2, h1;
@@ -483,7 +485,7 @@ public:
 
     void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
     {
-        assert(data.length < blockSize);
+        assert(data.length < blockSizeInBytes);
         assert(data.length > 0);
         size += data.length;
         ulong k1 = 0;
@@ -592,6 +594,7 @@ T rotl(T)(T x, uint y)
 in
 {
     import std.traits : isUnsigned;
+
     static assert(isUnsigned!T);
     assert(y >= 0 && y <= bits!T);
 }
@@ -603,6 +606,7 @@ body
 T shuffle(T)(T k, T c1, T c2, ubyte r1)
 {
     import std.traits : isUnsigned;
+
     static assert(isUnsigned!T);
     k *= c1;
     k = rotl(k, r1);
@@ -613,6 +617,7 @@ T shuffle(T)(T k, T c1, T c2, ubyte r1)
 void update(T)(ref T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
 {
     import std.traits : isUnsigned;
+
     static assert(isUnsigned!T);
     h ^= shuffle(k, c1, c2, r1);
     h = rotl(h, r2);
@@ -639,56 +644,55 @@ ulong fmix(ulong k) pure nothrow @nogc
     k ^= k >> 33;
     return k;
 }
-/*
-@system void main()
+
+version (TestMurmurHash3Thoughput)
 {
-    import std.stdio : stdin, writeln;
-    import std.digest.digest;
-    import std.range : repeat, iota;
-    import std.algorithm : joiner;
-
-    //auto stdinRange = stdin.byChunk(64 * 1024);
-    //    ubyte[1024] buffer;
-    //    auto oneGB = repeat(buffer, 5*1024*1024);
-    //    writeln(digest!MurmurHash3_x64_128(oneGB).toHexString!(Order.decreasing)());
-
-    enum _1M = 1024 * 1024UL;
-    enum _1G = 1024 * _1M;
-    ubyte[] buffer = new ubyte[_1G];
-    alias ulong2 = ulong[2];
-    ulong2[] ulong_buffer = new ulong2[_1G / ulong2.sizeof];
-
-    // Thoughput: 3.96 GiB/s
-    auto useLong2 = () {
-        SMurmurHash3_x64_128 hasher;
-        hasher.put(ulong_buffer);
-        hasher.finalize();
-        writeln(cast(ubyte[16]) hasher.get());
-    };
-
-    // Thoughput: 3.96 GiB/s
-    auto useByteArrayAsLong2 = () {
-        SMurmurHash3_x64_128 hasher;
-        hasher.put(cast(const(ulong[2])[]) buffer);
-        hasher.finalize();
-        writeln(cast(ubyte[16]) hasher.get());
-    };
-
-    // Thoughput: 3.78 GiB/s
-    auto useDigester = () {
-        MurmurHash3_x64_128 hasher;
-        hasher.put(buffer);
-        writeln(hasher.finish());
-    };
-
-    // Thoughput: 3.78 GiB/s
-    auto useDigestAPI = () { writeln(digest!MurmurHash3_x64_128(buffer)); };
-
-    import std.datetime : benchmark;
-
-    enum times = 10;
-    foreach (result; benchmark!(useDigestAPI, useDigester, useByteArrayAsLong2, useLong2)(times))
+    @system void main()
     {
-        writeln("Thoughput: ", times * 1000. / result.msecs, " GiB/s");
+        import std.stdio : stdin, writeln;
+        import std.digest.digest;
+        import std.range : repeat, iota;
+        import std.algorithm : joiner;
+
+        enum _1M = 1024 * 1024UL;
+        enum _1G = 1024 * _1M;
+        ubyte[] buffer = new ubyte[_1G];
+        alias ulong2 = ulong[2];
+        ulong2[] ulong_buffer = new ulong2[_1G / ulong2.sizeof];
+
+        // Thoughput: 3.96 GiB/s
+        auto useLong2 = () {
+            SMurmurHash3_x64_128 hasher;
+            hasher.putBlocks(ulong_buffer);
+            hasher.finalize();
+            return hasher.get();
+        };
+
+        // Thoughput: 3.96 GiB/s
+        auto useByteArrayAsLong2 = () {
+            SMurmurHash3_x64_128 hasher;
+            hasher.putBlocks(cast(const(ulong[2])[]) buffer);
+            hasher.finalize();
+            return hasher.get();
+        };
+
+        // Thoughput: 3.78 GiB/s
+        auto useDigester = () {
+            MurmurHash3_x64_128 hasher;
+            hasher.put(buffer);
+            return hasher.finish();
+        };
+
+        // Thoughput: 3.78 GiB/s
+        auto useDigestAPI = () { return digest!MurmurHash3_x64_128(buffer); };
+
+        import std.datetime : benchmark;
+        writeln("Please wait while benchmarking MurmurHash3");
+        enum times = 10;
+        foreach (result; benchmark!(useDigestAPI, useDigester, useByteArrayAsLong2,
+                useLong2)(times))
+        {
+            writeln("Thoughput: ", times * 1000. / result.msecs, " GiB/s");
+        }
     }
-}*/
+}
