@@ -27,13 +27,18 @@ void main() {
         }
 	import std.datetime : benchmark;
         immutable times = (_Ki^^3) / _SIZE;
-        writeln("Please wait while benchmarking MurmurHash3, running 256KiB hash ", times, " times");
-        foreach (result; benchmark!(
+        writeln("Please wait while benchmarking MurmurHash3, running ", times, "*hash(256KiB) = 1GiB");
+        immutable descriptions = [
+		"C++ MurmurHash3_x64_128", "D SMurmurHash3_x64_128", "D digest MurmurHash3_x64_128",
+		"C++ MurmurHash3_x86_128", "D SMurmurHash3_x86_128", "D digest MurmurHash3_x86_128",
+		"C++ MurmurHash3_x86_32",  "D SMurmurHash3_x86_32",  "D digest MurmurHash3_x86_32",
+	];
+        foreach (i, result; benchmark!(
 		HashC!(.MurmurHash3_x64_128),useHasher!SMurmurHash3_x64_128,useDigestAPI!SMurmurHash3_x64_128,
 		HashC!(.MurmurHash3_x86_128),useHasher!SMurmurHash3_x86_128,useDigestAPI!SMurmurHash3_x86_128,
 		HashC!(.MurmurHash3_x86_32),useHasher!SMurmurHash3_x86_32,useDigestAPI!SMurmurHash3_x86_32,
 		)(times))
         {
-            writeln("Thoughput: ", times * 1000. / result.msecs, " GiB/s");
+            writefln("%-30s - %.0f GiB/s", descriptions[i], times * 1000. / result.msecs);
         }
 }

@@ -117,6 +117,7 @@ private:
     {
         return (x & -x) > (x - 1);
     }
+
 }
 
 unittest
