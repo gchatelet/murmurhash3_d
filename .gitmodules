@@ -1,0 +1,3 @@
+[submodule "smasher"]
+	path = smasher
+	url = https://github.com/aappleby/smhasher.git
