@@ -42,9 +42,9 @@ void main()
         immutable times = (_Ki^^3) / _SIZE;
         writeln("Please wait while benchmarking MurmurHash3, running ", times, "*hash(256KiB) = 1GiB");
         auto descriptions = [
-		"C++ MurmurHash3_x64_128", "D SMurmurHash3_x64_128", "D digest MurmurHash3_x64_128",
-		"C++ MurmurHash3_x86_128", "D SMurmurHash3_x86_128", "D digest MurmurHash3_x86_128",
-		"C++ MurmurHash3_x86_32",  "D SMurmurHash3_x86_32",  "D digest MurmurHash3_x86_32",
+		"x64_128 C++ ", "x64_128 D", "x64_128 D digest",
+		"x86_128 C++ ", "x86_128 D", "x86_128 D digest",
+		"x86_32  C++ ", "x86_32  D", "x86_32  D digest",
 	];
 	auto results = benchmark!(
 		HashC!(.MurmurHash3_x64_128),useHasher!SMurmurHash3_x64_128,useDigestAPI!SMurmurHash3_x64_128,

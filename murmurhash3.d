@@ -71,7 +71,7 @@ struct Piecewise(Hasher)
         }
         // Pushing as many consecutive blocks as possible.
         immutable consecutiveBlocks = alignDownTo(data.length);
-        static if(false) {
+        static if(true) {
           hasher.putBlocks(cast(const(Block)[]) data[0 .. consecutiveBlocks]);
         } else {
           for(size_t i = 0; i<consecutiveBlocks/Block.sizeof;i++){
