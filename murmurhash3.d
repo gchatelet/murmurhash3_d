@@ -10,7 +10,6 @@ To understand the differences between the template and the OOP API, see $(D std.
 This module publicly imports $(D std.digest.digest) and can be used as a stand-alone module.
 
 License:   $(WEB www.boost.org/LICENSE_1_0.txt, Boost License 1.0).
-CTFE: Digests do not work in CTFE
 Authors: Guillaume Chatelet $(BR)
 References:
   $(LINK2 https://code.google.com/p/smhasher/wiki/MurmurHash3, reference implementation)
@@ -31,66 +30,69 @@ alias MurmurHash3_x86_128Digest = WrapperDigest!MurmurHash3_x86_128;
 alias MurmurHash3_x64_128Digest = WrapperDigest!MurmurHash3_x64_128;
 
 /**
-MurmurHash3 cannot put chunks smaller than blockSizeInBytes at a time. This
-struct stores remainder bytes in a buffer and pushes it as soon as the  block is
+MurmurHash3 cannot put chunks smaller than Block.sizeof at a time. This struct
+stores remainder bytes in a buffer and pushes it as soon as the block is
 complete or during finalization.
 */
 struct Piecewise(Hasher)
 {
-    alias Block = Hasher.Block;
-    enum blockSizeInBytes = Block.sizeof;
     enum blockSize = bits!Block;
 
+    alias Block = Hasher.Block;
+    union BufferUnion
+    {
+        Block block;
+        ubyte[Block.sizeof] data;
+    }
+
+    BufferUnion buffer;
+    size_t bufferSize;
     Hasher hasher;
-    ubyte[blockSizeInBytes] buffer;
-    size_t bufferSize = 0;
+
+    static assert(Block.sizeof < bufferSize.max);
 
     void start()
     {
         this = Piecewise.init;
     }
 
-    void put(scope const(ubyte)[] data...) pure nothrow
+    void put(scope const(ubyte[]) data...) pure nothrow @trusted
     {
-        // Buffer should never be full while entring this function.
-        assert(bufferSize < blockSizeInBytes);
-        // Complete left over from last call if any.
-        if (bufferSize > 0)
+        // Buffer should never be full while entering this function.
+        assert(bufferSize < Block.sizeof);
+
+        const(ubyte)* start = data.ptr;
+
+        // Check if we have some leftover data in the buffer. Then fill the first block buffer.
+        if (data.length + bufferSize < Block.sizeof)
         {
-            immutable available = blockSizeInBytes - bufferSize;
-            immutable copySize = available < data.length ? available : data.length;
-            buffer[bufferSize .. bufferSize + copySize] = data[0 .. copySize];
-            data = data[copySize .. $];
-            bufferSize += copySize;
-        }
-        // Push left over if it reached the size of a block.
-        if (bufferSize == blockSizeInBytes)
-        {
-            hasher.putBlocks(cast(Block[1]) buffer);
-            bufferSize = 0;
-        }
-        // Pushing as many consecutive blocks as possible.
-        immutable consecutiveBlocks = alignDownTo(data.length);
-        static if(true) {
-          hasher.putBlocks(cast(const(Block)[]) data[0 .. consecutiveBlocks]);
-        } else {
-          for(size_t i = 0; i<consecutiveBlocks/Block.sizeof;i++){
-            immutable Block block = (cast(const(Block)[])data)[i];
-            hasher.putBlocks(block);
-          }
-        }
-        // Adding remainder to temporary buffer.
-        data = data[consecutiveBlocks .. $];
-        assert(data.length < blockSizeInBytes);
-        if (data.length > 0)
-        {
-            assert(bufferSize == 0);
-            buffer[0 .. data.length] = data[];
+            buffer.data[bufferSize .. $] = start[0 .. data.length];
             bufferSize += data.length;
+            return;
         }
+        const preprocessed = Block.sizeof - bufferSize;
+        buffer.data[bufferSize .. $] = start[0 .. preprocessed];
+        hasher.putBlock(buffer.block);
+        start += preprocessed;
+
+        // Do main work: process chunks of Block.sizeof bytes
+        const numBlocks = (data.length - preprocessed) / Block.sizeof;
+        const(ubyte)* end = start + numBlocks * Block.sizeof;
+
+        for (; start < end; start += Block.sizeof)
+        {
+            buffer.data = start[0 .. Block.sizeof];
+            hasher.putBlock(buffer.block);
+        }
+        // +1 for preprocessed Block
+        hasher.size += (numBlocks + 1) * Block.sizeof;
+
+        // Now add remaining data to buffer
+        bufferSize = data.length - preprocessed - numBlocks * Block.sizeof;
+        buffer.data[0 .. bufferSize] = end[0 .. bufferSize];
     }
 
-    ubyte[blockSizeInBytes] finish() pure nothrow
+    ubyte[Block.sizeof] finish() pure nothrow
     {
         auto tail = getRemainder();
         if (tail.length > 0)
@@ -104,20 +106,8 @@ struct Piecewise(Hasher)
 private:
     const(ubyte)[] getRemainder()
     {
-        return buffer[0 .. bufferSize];
+        return buffer.data[0 .. bufferSize];
     }
-
-    static size_t alignDownTo(size_t size)
-    {
-        static assert(isPowerOf2(blockSizeInBytes));
-        return size & ~(blockSizeInBytes - 1UL);
-    }
-
-    static bool isPowerOf2(uint x) @nogc
-    {
-        return (x & -x) > (x - 1);
-    }
-
 }
 
 unittest
@@ -171,11 +161,15 @@ to putBlocks is allowed.
 struct SMurmurHash3_x86_32
 {
 private:
-    enum blockSizeInBytes = Block.sizeof;
     enum uint c1 = 0xcc9e2d51;
     enum uint c2 = 0x1b873593;
     uint h1;
     size_t size;
+
+    void putBlock(uint block) pure nothrow @nogc
+    {
+        update(h1, block, 0, c1, c2, 15, 13, 0xe6546b64);
+    }
 
 public:
     alias Block = uint;
@@ -187,18 +181,20 @@ public:
 
     @disable this(this);
 
-    void putBlocks(scope const(Block)[] blocks...) pure nothrow @nogc
+    void putBlocks(scope const(uint[]) blocks...) pure nothrow @nogc @trusted
     {
-        foreach (block; blocks)
+        const(Block)* start = blocks.ptr;
+        const(Block*) end = blocks.ptr + blocks.length;
+        for (; start < end; start++)
         {
-            update(h1, block, 0, c1, c2, 15, 13, 0xe6546b64);
+            putBlock(*start);
         }
         size += blocks.length * Block.sizeof;
     }
 
-    void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
+    void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
     {
-        assert(data.length < blockSizeInBytes);
+        assert(data.length < Block.sizeof);
         assert(data.length >= 0);
         size += data.length;
         uint k1 = 0;
@@ -231,7 +227,7 @@ public:
 
     ubyte[4] getBytes() pure nothrow @nogc
     {
-        return cast(ubyte[4])cast(uint[1])[h1];
+        return cast(ubyte[4]) cast(uint[1])[h1];
     }
 }
 
@@ -253,12 +249,12 @@ version (unittest)
 ///
 unittest
 {
-  const(uint)[] data = [1, 2, 3, 4];
-  SMurmurHash3_x86_32 hasher;
-  hasher.putBlocks(data); // call many times if you need.
-  hasher.putRemainder(/* bytes */); // put remainder bytes if needed.
-  hasher.finalize(); // always finalize before calling get.
-  assert(hasher.get() == 1145416960);
+    const(uint)[] data = [1, 2, 3, 4];
+    SMurmurHash3_x86_32 hasher;
+    hasher.putBlocks(data); // call many times if you need.
+    hasher.putRemainder( /* bytes */ ); // put remainder bytes if needed.
+    hasher.finalize(); // always finalize before calling get.
+    assert(hasher.get() == 1145416960);
 }
 
 unittest
@@ -310,13 +306,20 @@ to putBlocks is allowed.
 struct SMurmurHash3_x86_128
 {
 private:
-    enum blockSizeInBytes = Block.sizeof;
     enum uint c1 = 0x239b961b;
     enum uint c2 = 0xab0e9789;
     enum uint c3 = 0x38b34ae5;
     enum uint c4 = 0xa1e38b93;
     uint h4, h3, h2, h1;
     size_t size;
+
+    void putBlock(Block block) pure nothrow @nogc
+    {
+        update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
+        update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747);
+        update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35);
+        update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
+    }
 
 public:
     alias Block = uint[4];
@@ -336,21 +339,20 @@ public:
 
     @disable this(this);
 
-    void putBlocks(scope const(Block)[] blocks...) pure nothrow @nogc
+    void putBlocks(scope const(Block[]) blocks...) pure nothrow @nogc @trusted
     {
-        foreach (block; blocks)
+        const(Block)* start = blocks.ptr;
+        const(Block*) end = blocks.ptr + blocks.length;
+        for (; start < end; start++)
         {
-            update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
-            update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747);
-            update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35);
-            update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
+            putBlock(*start);
         }
         size += blocks.length * Block.sizeof;
     }
 
-    void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
+    void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
     {
-        assert(data.length < blockSizeInBytes);
+        assert(data.length < Block.sizeof);
         assert(data.length >= 0);
         size += data.length;
         uint k1 = 0;
@@ -447,7 +449,7 @@ public:
 
     ubyte[16] getBytes() pure nothrow @nogc
     {
-        return cast(ubyte[16])get();
+        return cast(ubyte[16]) get();
     }
 }
 
@@ -500,11 +502,16 @@ to putBlocks is allowed.
 struct SMurmurHash3_x64_128
 {
 private:
-    enum blockSizeInBytes = Block.sizeof;
     enum ulong c1 = 0x87c37b91114253d5;
     enum ulong c2 = 0x4cf5ad432745937f;
     ulong h2, h1;
     size_t size;
+
+    void putBlock(Block block) pure nothrow @nogc
+    {
+        update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
+        update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
+    }
 
 public:
     alias Block = ulong[2];
@@ -522,19 +529,20 @@ public:
 
     @disable this(this);
 
-    void putBlocks(scope const(Block)[] blocks...) pure nothrow @nogc
+    void putBlocks(scope const(Block[]) blocks...) pure nothrow @nogc @trusted
     {
-        foreach (block; blocks)
+        const(Block)* start = blocks.ptr;
+        const(Block*) end = blocks.ptr + blocks.length;
+        for (; start < end; start++)
         {
-            update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
-            update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
+            putBlock(*start);
         }
         size += blocks.length * Block.sizeof;
     }
 
-    void putRemainder(scope const(ubyte)[] data...) pure nothrow @nogc
+    void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
     {
-        assert(data.length < blockSizeInBytes);
+        assert(data.length < Block.sizeof);
         assert(data.length >= 0);
         size += data.length;
         ulong k1 = 0;
@@ -612,7 +620,7 @@ public:
 
     ubyte[16] getBytes() pure nothrow @nogc
     {
-        return cast(ubyte[16])get();
+        return cast(ubyte[16]) get();
     }
 }
 
@@ -657,12 +665,14 @@ unittest
 unittest
 {
     // Pushing unaligned data and making sure the result is still coherent.
-    void testUnalignedHash(H)() {
+    void testUnalignedHash(H)()
+    {
         immutable ubyte[1025] data = 0xAC;
-        immutable alignedHash = digest!H(data[0..$-1]); // 0..1023
-        immutable unalignedHash = digest!H(data[1..$]); // 1..1024
+        immutable alignedHash = digest!H(data[0 .. $ - 1]); // 0..1023
+        immutable unalignedHash = digest!H(data[1 .. $]); // 1..1024
         assert(alignedHash == unalignedHash);
     }
+
     testUnalignedHash!MurmurHash3_x86_32();
     testUnalignedHash!MurmurHash3_x86_128();
     testUnalignedHash!MurmurHash3_x64_128();

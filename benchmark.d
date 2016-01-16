@@ -1,61 +1,81 @@
-extern(C++)
+import std.stdio;
+
+extern (C++)
 {
-	void MurmurHash3_x86_32  ( const(void*) key, int len, uint seed, void * out_ );
-	void MurmurHash3_x86_128 ( const(void*) key, int len, uint seed, void * out_ );
-	void MurmurHash3_x64_128 ( const(void*) key, int len, uint seed, void * out_ );
+    void MurmurHash3_x86_32(const(void*) key, int len, uint seed, void* out_);
+    void MurmurHash3_x86_128(const(void*) key, int len, uint seed, void* out_);
+    void MurmurHash3_x64_128(const(void*) key, int len, uint seed, void* out_);
 }
 
 void consume(void[] buf)
 {
-version(GNU){
-	ubyte[16] tmp;
-	.MurmurHash3_x86_32(buf.ptr, 0, 0, &tmp);
-} else {
-	import core.bitop : volatileLoad;
-	volatileLoad(cast(ubyte*)buf.ptr);
+    version (GNU)
+    {
+        ubyte[16] tmp;
+        .MurmurHash3_x86_32(buf.ptr, 0, 0, &tmp);
+    }
+    else
+    {
+        import core.bitop : volatileLoad;
+
+        volatileLoad(cast(ubyte*) buf.ptr);
+    }
 }
+
+immutable _Ki = 1024UL;
+immutable _HASH_SIZE = 256UL * _Ki; // 256 KiB
+immutable _TOTAL_HASH_SIZE = _Ki ^^ 3; // 1GiB
+immutable _EXECUTION_COUNT = _TOTAL_HASH_SIZE / _HASH_SIZE; // 4096
+ubyte[] buffer;
+
+void BaseLineHash(alias H)()
+{
+    ubyte[16] tmp;
+    H(buffer.ptr, cast(int)(buffer.length), 0U, &tmp);
+    consume(tmp);
+}
+
+import murmurhash3;
+
+void DHash(H)()
+{
+    H hasher;
+    hasher.putBlocks(cast(const(H.Block)[]) buffer);
+    hasher.finalize();
+    consume(hasher.getBytes());
+}
+
+void DDigest(H)()
+{
+    consume(digest!(Piecewise!H)(buffer));
+}
+
+void doBenchmark(string suffix)()
+{
+    import std.datetime : benchmark;
+    import std.algorithm : reduce, min;
+
+    const descriptions = ["C++", "D", "D digest"];
+    auto results = benchmark!(
+        mixin("BaseLineHash!(.MurmurHash3_" ~ suffix ~ ")"),
+        mixin("DHash!SMurmurHash3_" ~ suffix),
+        mixin("DDigest!SMurmurHash3_" ~ suffix))(_EXECUTION_COUNT);
+    const baseline = results[0];
+    foreach (i, result; results)
+    {
+        writefln("%-20s - %3d%% - %.2f GiB/s", suffix ~ " " ~ descriptions[i],
+            100 * baseline.msecs / result.msecs, _EXECUTION_COUNT * 1000. / result.usecs);
+    }
+    writeln();
 }
 
 void main()
 {
-	import std.stdio;
-	immutable _Ki = 1024UL;
-	immutable _SIZE = 256UL * _Ki; // 256 KiB
-	ubyte[] buffer = new ubyte[_SIZE];
-	buffer[] = 0xAC;
-	void HashC(alias H)() {
-		ubyte[16] tmp;
-		H(buffer.ptr, cast(int)(buffer.length), 0U, &tmp);
-		consume(tmp);
-	}
-        import murmurhash3;
-	void useHasher(H)() {
-		H hasher;
-		hasher.putBlocks(cast(const(H.Block)[])buffer);
-		hasher.finalize();
-		consume(hasher.getBytes());
-        }
-        void useDigestAPI(H)() {
-		consume(digest!(Piecewise!H)(buffer));
-        }
-	import std.datetime : benchmark;
-        immutable times = (_Ki^^3) / _SIZE;
-        writeln("Please wait while benchmarking MurmurHash3, running ", times, "*hash(256KiB) = 1GiB");
-        auto descriptions = [
-		"x64_128 C++ ", "x64_128 D", "x64_128 D digest",
-		"x86_128 C++ ", "x86_128 D", "x86_128 D digest",
-		"x86_32  C++ ", "x86_32  D", "x86_32  D digest",
-	];
-	auto results = benchmark!(
-		HashC!(.MurmurHash3_x64_128),useHasher!SMurmurHash3_x64_128,useDigestAPI!SMurmurHash3_x64_128,
-		HashC!(.MurmurHash3_x86_128),useHasher!SMurmurHash3_x86_128,useDigestAPI!SMurmurHash3_x86_128,
-		HashC!(.MurmurHash3_x86_32),useHasher!SMurmurHash3_x86_32,useDigestAPI!SMurmurHash3_x86_32,
-		)(times);
-	import std.algorithm;
-	const fastest = results.reduce!min;
-	import std.range : lockstep;
-        foreach ( i, result; results)
-        {
-            writefln("%-30s - %3d%% - %.0f GiB/s", descriptions[i], 100 * fastest.msecs / result.msecs, times * 1000. / result.msecs);
-        }
+    buffer = new ubyte[_HASH_SIZE];
+    buffer[] = 0xAC;
+    writeln("Please wait while benchmarking MurmurHash3, running ",
+        _EXECUTION_COUNT, "*hash(256KiB) = 1GiB");
+    doBenchmark!"x64_128"();
+    doBenchmark!"x86_128"();
+    doBenchmark!"x86_32"();
 }
