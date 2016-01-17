@@ -167,7 +167,7 @@ auto getBytes(H)(ref H hash) pure nothrow @nogc
 {
     static if (is(H.Block == uint))
     {
-        return cast(ubyte[H.Block.sizeof]) cast(uint[1]) [hash.get()];
+        return cast(ubyte[H.Block.sizeof]) cast(uint[1])[hash.get()];
     }
     else
     {
@@ -242,16 +242,32 @@ public:
 
 version (unittest)
 {
-    @trusted string toHex(const(ubyte)[] hash)
-    {
-        return toHexString(hash).idup;
-    }
-
     import std.string : representation;
 
-    string digestToHex(T)(string data, uint seed = 0)
+    auto hash(H, Block = H.Block)(string data)
     {
-        return digest!(T)(data).toHex();
+        H hasher;
+        immutable blocks = data.length / Block.sizeof;
+        hasher.putBlocks(cast(const(Block)[]) data[0 .. blocks * Block.sizeof]);
+        hasher.putRemainder(cast(const(ubyte)[]) data[blocks * Block.sizeof .. $]);
+        hasher.finalize();
+        return hasher.getBytes();
+    }
+
+    void checkResult(H)(in string[string] groundtruth)
+    {
+        foreach (data, expectedHash; groundtruth)
+        {
+            alias PiecewiseH = Piecewise!H;
+            assert(data.digest!PiecewiseH.toHexString() == expectedHash);
+            assert(data.hash!H.toHexString() == expectedHash);
+            PiecewiseH hasher;
+            foreach (element; data)
+            {
+                hasher.put(element);
+            }
+            assert(hasher.finish.toHexString() == expectedHash);
+        }
     }
 }
 
@@ -268,40 +284,33 @@ unittest
 
 unittest
 {
-    alias toHex = digestToHex!MurmurHash3_x86_32;
-    assert(toHex("") == "00000000");
-    assert(toHex("a") == "B269253C");
-    assert(toHex("ab") == "5FD7BF9B");
-    assert(toHex("abc") == "FA93DDB3");
-    assert(toHex("abcd") == "6A67ED43");
-    assert(toHex("abcde") == "F69A9BE8");
-    assert(toHex("abcdef") == "85C08161");
-    assert(toHex("abcdefg") == "069B3C88");
-    assert(toHex("abcdefgh") == "C4CCDD49");
-    assert(toHex("abcdefghi") == "F0061442");
-    assert(toHex("abcdefghij") == "91779288");
-    assert(toHex("abcdefghijk") == "DF253B5F");
-    assert(toHex("abcdefghijkl") == "273D6FA3");
-    assert(toHex("abcdefghijklm") == "1B1612F2");
-    assert(toHex("abcdefghijklmn") == "F06D52F8");
-    assert(toHex("abcdefghijklmno") == "D2F7099D");
-    assert(toHex("abcdefghijklmnop") == "ED9162E7");
-    assert(toHex("abcdefghijklmnopq") == "4A5E65B6");
-    assert(toHex("abcdefghijklmnopqr") == "94A819C2");
-    assert(toHex("abcdefghijklmnopqrs") == "C15BBF85");
-    assert(toHex("abcdefghijklmnopqrst") == "9A711CBE");
-    assert(toHex("abcdefghijklmnopqrstu") == "ABE7195A");
-    assert(toHex("abcdefghijklmnopqrstuv") == "C73CB670");
-    assert(toHex("abcdefghijklmnopqrstuvw") == "1C4D1EA5");
-    assert(toHex("abcdefghijklmnopqrstuvwx") == "3939F9B0");
-    assert(toHex("abcdefghijklmnopqrstuvwxy") == "1A568338");
-    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "6D034EA3");
-
-    // Pushing pieces shorter than block size.
-    auto hasher = MurmurHash3_x86_32();
-    hasher.put(['a', 'b']);
-    hasher.put(['c', 'd']);
-    assert(hasher.finish().toHex() == "6A67ED43");
+    checkResult!SMurmurHash3_x86_32(["" : "00000000", //
+    "a" : "B269253C", //
+        "ab" : "5FD7BF9B", //
+        "abc" : "FA93DDB3", //
+        "abcd" : "6A67ED43", //
+        "abcde" : "F69A9BE8", //
+        "abcdef" : "85C08161", //
+        "abcdefg" : "069B3C88", //
+        "abcdefgh" : "C4CCDD49", //
+        "abcdefghi" : "F0061442", //
+        "abcdefghij" : "91779288", //
+        "abcdefghijk" : "DF253B5F", //
+        "abcdefghijkl" : "273D6FA3", //
+        "abcdefghijklm" : "1B1612F2", //
+        "abcdefghijklmn" : "F06D52F8", //
+        "abcdefghijklmno" : "D2F7099D", //
+        "abcdefghijklmnop" : "ED9162E7", //
+        "abcdefghijklmnopq" : "4A5E65B6", //
+        "abcdefghijklmnopqr" : "94A819C2", //
+        "abcdefghijklmnopqrs" : "C15BBF85", //
+        "abcdefghijklmnopqrst" : "9A711CBE", //
+        "abcdefghijklmnopqrstu" : "ABE7195A", //
+        "abcdefghijklmnopqrstuv" : "C73CB670", //
+        "abcdefghijklmnopqrstuvw" : "1C4D1EA5", //
+        "abcdefghijklmnopqrstuvwx" : "3939F9B0", //
+        "abcdefghijklmnopqrstuvwxy" : "1A568338", //
+        "abcdefghijklmnopqrstuvwxyz" : "6D034EA3"]);
 }
 
 /**
@@ -448,40 +457,33 @@ public:
 
 unittest
 {
-    alias toHex = digestToHex!MurmurHash3_x86_128;
-    assert(toHex("") == "00000000000000000000000000000000");
-    assert(toHex("a") == "3C9394A71BB056551BB056551BB05655");
-    assert(toHex("ab") == "DF5184151030BE251030BE251030BE25");
-    assert(toHex("abc") == "D1C6CD75A506B0A2A506B0A2A506B0A2");
-    assert(toHex("abcd") == "AACCB6962EC6AF452EC6AF452EC6AF45");
-    assert(toHex("abcde") == "FB2E40C5BCC5245D7701725A7701725A");
-    assert(toHex("abcdef") == "0AB97CE12127AFA1F9DFBEA9F9DFBEA9");
-    assert(toHex("abcdefg") == "D941B590DE3A86092869774A2869774A");
-    assert(toHex("abcdefgh") == "3611F4AE8714B1AD92806CFA92806CFA");
-    assert(toHex("abcdefghi") == "1C8C05AD6F590622107DD2147C4194DD");
-    assert(toHex("abcdefghij") == "A72ED9F50E90379A2AAA92C77FF12F69");
-    assert(toHex("abcdefghijk") == "DDC9C8A01E111FCA2DF1FE8257975EBD");
-    assert(toHex("abcdefghijkl") == "FE038573C02482F4ADDFD42753E58CD2");
-    assert(toHex("abcdefghijklm") == "15A23AC1ECA1AEDB66351CF470DE2CD9");
-    assert(toHex("abcdefghijklmn") == "8E11EC75D71F5D60F4456F944D89D4F1");
-    assert(toHex("abcdefghijklmno") == "691D6DEEAED51A4A5714CE84A861A7AD");
-    assert(toHex("abcdefghijklmnop") == "2776D29F5612B990218BCEE445BA93D1");
-    assert(toHex("abcdefghijklmnopq") == "D3A445046F5C51642ADC6DD99D07111D");
-    assert(toHex("abcdefghijklmnopqr") == "AA5493A0DA291D966A9E7128585841D9");
-    assert(toHex("abcdefghijklmnopqrs") == "281B6A4F9C45B9BFC3B77850930F2C20");
-    assert(toHex("abcdefghijklmnopqrst") == "19342546A8216DB62873B49E545DCB1F");
-    assert(toHex("abcdefghijklmnopqrstu") == "A6C0F30D6C738620E7B9590D2E088D99");
-    assert(toHex("abcdefghijklmnopqrstuv") == "A7D421D9095CDCEA393CBBA908342384");
-    assert(toHex("abcdefghijklmnopqrstuvw") == "C3A93D572B014949317BAD7EE809158F");
-    assert(toHex("abcdefghijklmnopqrstuvwx") == "802381D77956833791F87149326E4801");
-    assert(toHex("abcdefghijklmnopqrstuvwxy") == "0AC619A5302315755A80D74ADEFAA842");
-    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "1306343E662F6F666E56F6172C3DE344");
-
-    // Pushing pieces shorter than block size.
-    auto hasher = MurmurHash3_x86_128();
-    hasher.put(['a', 'b']);
-    hasher.put(['c', 'd']);
-    assert(hasher.finish().toHex() == "AACCB6962EC6AF452EC6AF452EC6AF45");
+    checkResult!SMurmurHash3_x86_128(["" : "00000000000000000000000000000000", //
+        "a" : "3C9394A71BB056551BB056551BB05655", //
+        "ab" : "DF5184151030BE251030BE251030BE25", //
+        "abc" : "D1C6CD75A506B0A2A506B0A2A506B0A2", //
+        "abcd" : "AACCB6962EC6AF452EC6AF452EC6AF45", //
+        "abcde" : "FB2E40C5BCC5245D7701725A7701725A", //
+        "abcdef" : "0AB97CE12127AFA1F9DFBEA9F9DFBEA9", //
+        "abcdefg" : "D941B590DE3A86092869774A2869774A", //
+        "abcdefgh" : "3611F4AE8714B1AD92806CFA92806CFA", //
+        "abcdefghi" : "1C8C05AD6F590622107DD2147C4194DD", //
+        "abcdefghij" : "A72ED9F50E90379A2AAA92C77FF12F69", //
+        "abcdefghijk" : "DDC9C8A01E111FCA2DF1FE8257975EBD", //
+        "abcdefghijkl" : "FE038573C02482F4ADDFD42753E58CD2", //
+        "abcdefghijklm" : "15A23AC1ECA1AEDB66351CF470DE2CD9", //
+        "abcdefghijklmn" : "8E11EC75D71F5D60F4456F944D89D4F1", //
+        "abcdefghijklmno" : "691D6DEEAED51A4A5714CE84A861A7AD", //
+        "abcdefghijklmnop" : "2776D29F5612B990218BCEE445BA93D1", //
+        "abcdefghijklmnopq" : "D3A445046F5C51642ADC6DD99D07111D", //
+        "abcdefghijklmnopqr" : "AA5493A0DA291D966A9E7128585841D9", //
+        "abcdefghijklmnopqrs" : "281B6A4F9C45B9BFC3B77850930F2C20", //
+        "abcdefghijklmnopqrst" : "19342546A8216DB62873B49E545DCB1F", //
+        "abcdefghijklmnopqrstu" : "A6C0F30D6C738620E7B9590D2E088D99", //
+        "abcdefghijklmnopqrstuv" : "A7D421D9095CDCEA393CBBA908342384", //
+        "abcdefghijklmnopqrstuvw" : "C3A93D572B014949317BAD7EE809158F", //
+        "abcdefghijklmnopqrstuvwx" : "802381D77956833791F87149326E4801", //
+        "abcdefghijklmnopqrstuvwxy" : "0AC619A5302315755A80D74ADEFAA842", //
+        "abcdefghijklmnopqrstuvwxyz" : "1306343E662F6F666E56F6172C3DE344"]);
 }
 
 /**
@@ -603,40 +605,33 @@ public:
 
 unittest
 {
-    alias toHex = digestToHex!MurmurHash3_x64_128;
-    assert(toHex("") == "00000000000000000000000000000000");
-    assert(toHex("a") == "897859F6655555855A890E51483AB5E6");
-    assert(toHex("ab") == "2E1BED16EA118B93ADD4529B01A75EE6");
-    assert(toHex("abc") == "6778AD3F3F3F96B4522DCA264174A23B");
-    assert(toHex("abcd") == "4FCD5646D6B77BB875E87360883E00F2");
-    assert(toHex("abcde") == "B8BB96F491D036208CECCF4BA0EEC7C5");
-    assert(toHex("abcdef") == "55BFA3ACBF867DE45C842133990971B0");
-    assert(toHex("abcdefg") == "99E49EC09F2FCDA6B6BB55B13AA23A1C");
-    assert(toHex("abcdefgh") == "028CEF37B00A8ACCA14069EB600D8948");
-    assert(toHex("abcdefghi") == "64793CF1CFC0470533E041B7F53DB579");
-    assert(toHex("abcdefghij") == "998C2F770D5BC1B6C91A658CDC854DA2");
-    assert(toHex("abcdefghijk") == "029D78DFB8D095A871E75A45E2317CBB");
-    assert(toHex("abcdefghijkl") == "94E17AE6B19BF38E1C62FF7232309E1F");
-    assert(toHex("abcdefghijklm") == "73FAC0A78D2848167FCCE70DFF7B652E");
-    assert(toHex("abcdefghijklmn") == "E075C3F5A794D09124336AD2276009EE");
-    assert(toHex("abcdefghijklmno") == "FB2F0C895124BE8A612A969C2D8C546A");
-    assert(toHex("abcdefghijklmnop") == "23B74C22A33CCAC41AEB31B395D63343");
-    assert(toHex("abcdefghijklmnopq") == "57A6BD887F746475E40D11A19D49DAEC");
-    assert(toHex("abcdefghijklmnopqr") == "508A7F90EC8CF0776BC7005A29A8D471");
-    assert(toHex("abcdefghijklmnopqrs") == "886D9EDE23BC901574946FB62A4D8AA6");
-    assert(toHex("abcdefghijklmnopqrst") == "F1E237F926370B314BD016572AF40996");
-    assert(toHex("abcdefghijklmnopqrstu") == "3CC9FF79E268D5C9FB3C9BE9C148CCD7");
-    assert(toHex("abcdefghijklmnopqrstuv") == "56F8ABF430E388956DA9F4A8741FDB46");
-    assert(toHex("abcdefghijklmnopqrstuvw") == "8E234F9DBA0A4840FFE9541CEBB7BE83");
-    assert(toHex("abcdefghijklmnopqrstuvwx") == "F72CDED40F96946408F22153A3CF0F79");
-    assert(toHex("abcdefghijklmnopqrstuvwxy") == "0F96072FA4CBE771DBBD9E398115EEED");
-    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "A94A6F517E9D9C7429D5A7B6899CADE9");
-
-    // Pushing pieces shorter than block size.
-    auto hasher = MurmurHash3_x64_128();
-    hasher.put(['a', 'b']);
-    hasher.put(['c', 'd']);
-    assert(hasher.finish().toHex() == "4FCD5646D6B77BB875E87360883E00F2");
+    checkResult!SMurmurHash3_x64_128(["" : "00000000000000000000000000000000", //
+        "a" : "897859F6655555855A890E51483AB5E6", //
+        "ab" : "2E1BED16EA118B93ADD4529B01A75EE6", //
+        "abc" : "6778AD3F3F3F96B4522DCA264174A23B", //
+        "abcd" : "4FCD5646D6B77BB875E87360883E00F2", //
+        "abcde" : "B8BB96F491D036208CECCF4BA0EEC7C5", //
+        "abcdef" : "55BFA3ACBF867DE45C842133990971B0", //
+        "abcdefg" : "99E49EC09F2FCDA6B6BB55B13AA23A1C", //
+        "abcdefgh" : "028CEF37B00A8ACCA14069EB600D8948", //
+        "abcdefghi" : "64793CF1CFC0470533E041B7F53DB579", //
+        "abcdefghij" : "998C2F770D5BC1B6C91A658CDC854DA2", //
+        "abcdefghijk" : "029D78DFB8D095A871E75A45E2317CBB", //
+        "abcdefghijkl" : "94E17AE6B19BF38E1C62FF7232309E1F", //
+        "abcdefghijklm" : "73FAC0A78D2848167FCCE70DFF7B652E", //
+        "abcdefghijklmn" : "E075C3F5A794D09124336AD2276009EE", //
+        "abcdefghijklmno" : "FB2F0C895124BE8A612A969C2D8C546A", //
+        "abcdefghijklmnop" : "23B74C22A33CCAC41AEB31B395D63343", //
+        "abcdefghijklmnopq" : "57A6BD887F746475E40D11A19D49DAEC", //
+        "abcdefghijklmnopqr" : "508A7F90EC8CF0776BC7005A29A8D471", //
+        "abcdefghijklmnopqrs" : "886D9EDE23BC901574946FB62A4D8AA6", //
+        "abcdefghijklmnopqrst" : "F1E237F926370B314BD016572AF40996", //
+        "abcdefghijklmnopqrstu" : "3CC9FF79E268D5C9FB3C9BE9C148CCD7", //
+        "abcdefghijklmnopqrstuv" : "56F8ABF430E388956DA9F4A8741FDB46", //
+        "abcdefghijklmnopqrstuvw" : "8E234F9DBA0A4840FFE9541CEBB7BE83", //
+        "abcdefghijklmnopqrstuvwx" : "F72CDED40F96946408F22153A3CF0F79", //
+        "abcdefghijklmnopqrstuvwxy" : "0F96072FA4CBE771DBBD9E398115EEED", //
+        "abcdefghijklmnopqrstuvwxyz" : "A94A6F517E9D9C7429D5A7B6899CADE9"]);
 }
 
 unittest
