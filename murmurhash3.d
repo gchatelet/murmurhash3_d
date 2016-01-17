@@ -49,8 +49,6 @@ struct Piecewise(Hasher)
     size_t bufferSize;
     Hasher hasher;
 
-    static assert(Block.sizeof < bufferSize.max);
-
     void start()
     {
         this = Piecewise.init;
@@ -64,9 +62,9 @@ struct Piecewise(Hasher)
         const(ubyte)* start = data.ptr;
 
         // Check if we have some leftover data in the buffer. Then fill the first block buffer.
-        if (data.length + bufferSize < Block.sizeof)
+        if (bufferSize + data.length < Block.sizeof)
         {
-            buffer.data[bufferSize .. $] = start[0 .. data.length];
+            buffer.data[bufferSize .. bufferSize + data.length] = start[0 .. data.length];
             bufferSize += data.length;
             return;
         }
@@ -116,8 +114,9 @@ unittest
     {
         alias Block = ubyte[2];
         const(Block)[] results;
+        size_t size;
 
-        void putBlocks(const(Block)[] value) pure nothrow
+        void putBlock(Block value) pure nothrow
         {
             results ~= value;
         }
@@ -150,6 +149,32 @@ unittest
     assert(digester.getRemainder() == []);
 }
 
+void putBlocks(H, Block = H.Block)(ref H hash, scope const(Block[]) blocks...) pure nothrow @nogc @trusted
+{
+    with (hash)
+    {
+        const(Block)* start = blocks.ptr;
+        const(Block*) end = blocks.ptr + blocks.length;
+        for (; start < end; start++)
+        {
+            putBlock(*start);
+        }
+        size += blocks.length * Block.sizeof;
+    }
+}
+
+auto getBytes(H)(ref H hash) pure nothrow @nogc
+{
+    static if (is(H.Block == uint))
+    {
+        return cast(ubyte[H.Block.sizeof]) cast(uint[1]) [hash.get()];
+    }
+    else
+    {
+        return cast(ubyte[H.Block.sizeof]) hash.get();
+    }
+}
+
 /**
 MurmurHash3 for x86 processors producing a 32 bits value.
 
@@ -164,15 +189,10 @@ private:
     enum uint c1 = 0xcc9e2d51;
     enum uint c2 = 0x1b873593;
     uint h1;
-    size_t size;
-
-    void putBlock(uint block) pure nothrow @nogc
-    {
-        update(h1, block, 0, c1, c2, 15, 13, 0xe6546b64);
-    }
 
 public:
     alias Block = uint;
+    size_t size;
 
     this(uint seed)
     {
@@ -181,15 +201,9 @@ public:
 
     @disable this(this);
 
-    void putBlocks(scope const(uint[]) blocks...) pure nothrow @nogc @trusted
+    void putBlock(uint block) pure nothrow @nogc
     {
-        const(Block)* start = blocks.ptr;
-        const(Block*) end = blocks.ptr + blocks.length;
-        for (; start < end; start++)
-        {
-            putBlock(*start);
-        }
-        size += blocks.length * Block.sizeof;
+        update(h1, block, 0, c1, c2, 15, 13, 0xe6546b64);
     }
 
     void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
@@ -224,18 +238,13 @@ public:
     {
         return h1;
     }
-
-    ubyte[4] getBytes() pure nothrow @nogc
-    {
-        return cast(ubyte[4]) cast(uint[1])[h1];
-    }
 }
 
 version (unittest)
 {
     @trusted string toHex(const(ubyte)[] hash)
     {
-        return toHexString!(Order.decreasing)(hash).idup;
+        return toHexString(hash).idup;
     }
 
     import std.string : representation;
@@ -261,38 +270,38 @@ unittest
 {
     alias toHex = digestToHex!MurmurHash3_x86_32;
     assert(toHex("") == "00000000");
-    assert(toHex("a") == "3C2569B2");
-    assert(toHex("ab") == "9BBFD75F");
-    assert(toHex("abc") == "B3DD93FA");
-    assert(toHex("abcd") == "43ED676A");
-    assert(toHex("abcde") == "E89B9AF6");
-    assert(toHex("abcdef") == "6181C085");
-    assert(toHex("abcdefg") == "883C9B06");
-    assert(toHex("abcdefgh") == "49DDCCC4");
-    assert(toHex("abcdefghi") == "421406F0");
-    assert(toHex("abcdefghij") == "88927791");
-    assert(toHex("abcdefghijk") == "5F3B25DF");
-    assert(toHex("abcdefghijkl") == "A36F3D27");
-    assert(toHex("abcdefghijklm") == "F212161B");
-    assert(toHex("abcdefghijklmn") == "F8526DF0");
-    assert(toHex("abcdefghijklmno") == "9D09F7D2");
-    assert(toHex("abcdefghijklmnop") == "E76291ED");
-    assert(toHex("abcdefghijklmnopq") == "B6655E4A");
-    assert(toHex("abcdefghijklmnopqr") == "C219A894");
-    assert(toHex("abcdefghijklmnopqrs") == "85BF5BC1");
-    assert(toHex("abcdefghijklmnopqrst") == "BE1C719A");
-    assert(toHex("abcdefghijklmnopqrstu") == "5A19E7AB");
-    assert(toHex("abcdefghijklmnopqrstuv") == "70B63CC7");
-    assert(toHex("abcdefghijklmnopqrstuvw") == "A51E4D1C");
-    assert(toHex("abcdefghijklmnopqrstuvwx") == "B0F93939");
-    assert(toHex("abcdefghijklmnopqrstuvwxy") == "3883561A");
-    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "A34E036D");
+    assert(toHex("a") == "B269253C");
+    assert(toHex("ab") == "5FD7BF9B");
+    assert(toHex("abc") == "FA93DDB3");
+    assert(toHex("abcd") == "6A67ED43");
+    assert(toHex("abcde") == "F69A9BE8");
+    assert(toHex("abcdef") == "85C08161");
+    assert(toHex("abcdefg") == "069B3C88");
+    assert(toHex("abcdefgh") == "C4CCDD49");
+    assert(toHex("abcdefghi") == "F0061442");
+    assert(toHex("abcdefghij") == "91779288");
+    assert(toHex("abcdefghijk") == "DF253B5F");
+    assert(toHex("abcdefghijkl") == "273D6FA3");
+    assert(toHex("abcdefghijklm") == "1B1612F2");
+    assert(toHex("abcdefghijklmn") == "F06D52F8");
+    assert(toHex("abcdefghijklmno") == "D2F7099D");
+    assert(toHex("abcdefghijklmnop") == "ED9162E7");
+    assert(toHex("abcdefghijklmnopq") == "4A5E65B6");
+    assert(toHex("abcdefghijklmnopqr") == "94A819C2");
+    assert(toHex("abcdefghijklmnopqrs") == "C15BBF85");
+    assert(toHex("abcdefghijklmnopqrst") == "9A711CBE");
+    assert(toHex("abcdefghijklmnopqrstu") == "ABE7195A");
+    assert(toHex("abcdefghijklmnopqrstuv") == "C73CB670");
+    assert(toHex("abcdefghijklmnopqrstuvw") == "1C4D1EA5");
+    assert(toHex("abcdefghijklmnopqrstuvwx") == "3939F9B0");
+    assert(toHex("abcdefghijklmnopqrstuvwxy") == "1A568338");
+    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "6D034EA3");
 
     // Pushing pieces shorter than block size.
     auto hasher = MurmurHash3_x86_32();
     hasher.put(['a', 'b']);
     hasher.put(['c', 'd']);
-    assert(hasher.finish().toHex() == "43ED676A");
+    assert(hasher.finish().toHex() == "6A67ED43");
 }
 
 /**
@@ -311,18 +320,10 @@ private:
     enum uint c3 = 0x38b34ae5;
     enum uint c4 = 0xa1e38b93;
     uint h4, h3, h2, h1;
-    size_t size;
-
-    void putBlock(Block block) pure nothrow @nogc
-    {
-        update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
-        update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747);
-        update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35);
-        update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
-    }
 
 public:
     alias Block = uint[4];
+    size_t size;
 
     this(uint seed4, uint seed3, uint seed2, uint seed1)
     {
@@ -339,15 +340,12 @@ public:
 
     @disable this(this);
 
-    void putBlocks(scope const(Block[]) blocks...) pure nothrow @nogc @trusted
+    void putBlock(Block block) pure nothrow @nogc
     {
-        const(Block)* start = blocks.ptr;
-        const(Block*) end = blocks.ptr + blocks.length;
-        for (; start < end; start++)
-        {
-            putBlock(*start);
-        }
-        size += blocks.length * Block.sizeof;
+        update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
+        update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747);
+        update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35);
+        update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
     }
 
     void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
@@ -444,12 +442,7 @@ public:
 
     Block get() pure nothrow @nogc
     {
-        return [h4, h3, h2, h1];
-    }
-
-    ubyte[16] getBytes() pure nothrow @nogc
-    {
-        return cast(ubyte[16]) get();
+        return [h1, h2, h3, h4];
     }
 }
 
@@ -457,38 +450,38 @@ unittest
 {
     alias toHex = digestToHex!MurmurHash3_x86_128;
     assert(toHex("") == "00000000000000000000000000000000");
-    assert(toHex("a") == "A794933C5556B01B5556B01B5556B01B");
-    assert(toHex("ab") == "158451DF25BE301025BE301025BE3010");
-    assert(toHex("abc") == "75CDC6D1A2B006A5A2B006A5A2B006A5");
-    assert(toHex("abcd") == "96B6CCAA45AFC62E45AFC62E45AFC62E");
-    assert(toHex("abcde") == "C5402EFB5D24C5BC5A7201775A720177");
-    assert(toHex("abcdef") == "E17CB90AA1AF2721A9BEDFF9A9BEDFF9");
-    assert(toHex("abcdefg") == "90B541D909863ADE4A7769284A776928");
-    assert(toHex("abcdefgh") == "AEF41136ADB11487FA6C8092FA6C8092");
-    assert(toHex("abcdefghi") == "AD058C1C2206596F14D27D10DD94417C");
-    assert(toHex("abcdefghij") == "F5D92EA79A37900EC792AA2A692FF17F");
-    assert(toHex("abcdefghijk") == "A0C8C9DDCA1F111E82FEF12DBD5E9757");
-    assert(toHex("abcdefghijkl") == "738503FEF48224C027D4DFADD28CE553");
-    assert(toHex("abcdefghijklm") == "C13AA215DBAEA1ECF41C3566D92CDE70");
-    assert(toHex("abcdefghijklmn") == "75EC118E605D1FD7946F45F4F1D4894D");
-    assert(toHex("abcdefghijklmno") == "EE6D1D694A1AD5AE84CE1457ADA761A8");
-    assert(toHex("abcdefghijklmnop") == "9FD2762790B91256E4CE8B21D193BA45");
-    assert(toHex("abcdefghijklmnopq") == "0445A4D364515C6FD96DDC2A1D11079D");
-    assert(toHex("abcdefghijklmnopqr") == "A09354AA961D29DA28719E6AD9415858");
-    assert(toHex("abcdefghijklmnopqrs") == "4F6A1B28BFB9459C5078B7C3202C0F93");
-    assert(toHex("abcdefghijklmnopqrst") == "46253419B66D21A89EB473281FCB5D54");
-    assert(toHex("abcdefghijklmnopqrstu") == "0DF3C0A62086736C0D59B9E7998D082E");
-    assert(toHex("abcdefghijklmnopqrstuv") == "D921D4A7EADC5C09A9BB3C3984233408");
-    assert(toHex("abcdefghijklmnopqrstuvw") == "573DA9C34949012B7EAD7B318F1509E8");
-    assert(toHex("abcdefghijklmnopqrstuvwx") == "D7812380378356794971F89101486E32");
-    assert(toHex("abcdefghijklmnopqrstuvwxy") == "A519C60A751523304AD7805A42A8FADE");
-    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "3E340613666F2F6617F6566E44E33D2C");
+    assert(toHex("a") == "3C9394A71BB056551BB056551BB05655");
+    assert(toHex("ab") == "DF5184151030BE251030BE251030BE25");
+    assert(toHex("abc") == "D1C6CD75A506B0A2A506B0A2A506B0A2");
+    assert(toHex("abcd") == "AACCB6962EC6AF452EC6AF452EC6AF45");
+    assert(toHex("abcde") == "FB2E40C5BCC5245D7701725A7701725A");
+    assert(toHex("abcdef") == "0AB97CE12127AFA1F9DFBEA9F9DFBEA9");
+    assert(toHex("abcdefg") == "D941B590DE3A86092869774A2869774A");
+    assert(toHex("abcdefgh") == "3611F4AE8714B1AD92806CFA92806CFA");
+    assert(toHex("abcdefghi") == "1C8C05AD6F590622107DD2147C4194DD");
+    assert(toHex("abcdefghij") == "A72ED9F50E90379A2AAA92C77FF12F69");
+    assert(toHex("abcdefghijk") == "DDC9C8A01E111FCA2DF1FE8257975EBD");
+    assert(toHex("abcdefghijkl") == "FE038573C02482F4ADDFD42753E58CD2");
+    assert(toHex("abcdefghijklm") == "15A23AC1ECA1AEDB66351CF470DE2CD9");
+    assert(toHex("abcdefghijklmn") == "8E11EC75D71F5D60F4456F944D89D4F1");
+    assert(toHex("abcdefghijklmno") == "691D6DEEAED51A4A5714CE84A861A7AD");
+    assert(toHex("abcdefghijklmnop") == "2776D29F5612B990218BCEE445BA93D1");
+    assert(toHex("abcdefghijklmnopq") == "D3A445046F5C51642ADC6DD99D07111D");
+    assert(toHex("abcdefghijklmnopqr") == "AA5493A0DA291D966A9E7128585841D9");
+    assert(toHex("abcdefghijklmnopqrs") == "281B6A4F9C45B9BFC3B77850930F2C20");
+    assert(toHex("abcdefghijklmnopqrst") == "19342546A8216DB62873B49E545DCB1F");
+    assert(toHex("abcdefghijklmnopqrstu") == "A6C0F30D6C738620E7B9590D2E088D99");
+    assert(toHex("abcdefghijklmnopqrstuv") == "A7D421D9095CDCEA393CBBA908342384");
+    assert(toHex("abcdefghijklmnopqrstuvw") == "C3A93D572B014949317BAD7EE809158F");
+    assert(toHex("abcdefghijklmnopqrstuvwx") == "802381D77956833791F87149326E4801");
+    assert(toHex("abcdefghijklmnopqrstuvwxy") == "0AC619A5302315755A80D74ADEFAA842");
+    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "1306343E662F6F666E56F6172C3DE344");
 
     // Pushing pieces shorter than block size.
     auto hasher = MurmurHash3_x86_128();
     hasher.put(['a', 'b']);
     hasher.put(['c', 'd']);
-    assert(hasher.finish().toHex() == "96B6CCAA45AFC62E45AFC62E45AFC62E");
+    assert(hasher.finish().toHex() == "AACCB6962EC6AF452EC6AF452EC6AF45");
 }
 
 /**
@@ -505,16 +498,10 @@ private:
     enum ulong c1 = 0x87c37b91114253d5;
     enum ulong c2 = 0x4cf5ad432745937f;
     ulong h2, h1;
-    size_t size;
-
-    void putBlock(Block block) pure nothrow @nogc
-    {
-        update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
-        update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
-    }
 
 public:
     alias Block = ulong[2];
+    size_t size;
 
     this(ulong seed)
     {
@@ -529,15 +516,10 @@ public:
 
     @disable this(this);
 
-    void putBlocks(scope const(Block[]) blocks...) pure nothrow @nogc @trusted
+    void putBlock(Block block) pure nothrow @nogc
     {
-        const(Block)* start = blocks.ptr;
-        const(Block*) end = blocks.ptr + blocks.length;
-        for (; start < end; start++)
-        {
-            putBlock(*start);
-        }
-        size += blocks.length * Block.sizeof;
+        update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
+        update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
     }
 
     void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
@@ -615,12 +597,7 @@ public:
 
     Block get() pure nothrow @nogc
     {
-        return [h2, h1];
-    }
-
-    ubyte[16] getBytes() pure nothrow @nogc
-    {
-        return cast(ubyte[16]) get();
+        return [h1, h2];
     }
 }
 
@@ -628,38 +605,38 @@ unittest
 {
     alias toHex = digestToHex!MurmurHash3_x64_128;
     assert(toHex("") == "00000000000000000000000000000000");
-    assert(toHex("a") == "85555565F6597889E6B53A48510E895A");
-    assert(toHex("ab") == "938B11EA16ED1B2EE65EA7019B52D4AD");
-    assert(toHex("abc") == "B4963F3F3FAD78673BA2744126CA2D52");
-    assert(toHex("abcd") == "B87BB7D64656CD4FF2003E886073E875");
-    assert(toHex("abcde") == "2036D091F496BBB8C5C7EEA04BCFEC8C");
-    assert(toHex("abcdef") == "E47D86BFACA3BF55B07109993321845C");
-    assert(toHex("abcdefg") == "A6CD2F9FC09EE4991C3AA23AB155BBB6");
-    assert(toHex("abcdefgh") == "CC8A0AB037EF8C0248890D60EB6940A1");
-    assert(toHex("abcdefghi") == "0547C0CFF13C796479B53DF5B741E033");
-    assert(toHex("abcdefghij") == "B6C15B0D772F8C99A24D85DC8C651AC9");
-    assert(toHex("abcdefghijk") == "A895D0B8DF789D02BB7C31E2455AE771");
-    assert(toHex("abcdefghijkl") == "8EF39BB1E67AE1941F9E303272FF621C");
-    assert(toHex("abcdefghijklm") == "1648288DA7C0FA732E657BFF0DE7CC7F");
-    assert(toHex("abcdefghijklmn") == "91D094A7F5C375E0EE096027D26A3324");
-    assert(toHex("abcdefghijklmno") == "8ABE2451890C2FFB6A548C2D9C962A61");
-    assert(toHex("abcdefghijklmnop") == "C4CA3CA3224CB7234333D695B331EB1A");
-    assert(toHex("abcdefghijklmnopq") == "7564747F88BDA657ECDA499DA1110DE4");
-    assert(toHex("abcdefghijklmnopqr") == "77F08CEC907F8A5071D4A8295A00C76B");
-    assert(toHex("abcdefghijklmnopqrs") == "1590BC23DE9E6D88A68A4D2AB66F9474");
-    assert(toHex("abcdefghijklmnopqrst") == "310B3726F937E2F19609F42A5716D04B");
-    assert(toHex("abcdefghijklmnopqrstu") == "C9D568E279FFC93CD7CC48C1E99B3CFB");
-    assert(toHex("abcdefghijklmnopqrstuv") == "9588E330F4ABF85646DB1F74A8F4A96D");
-    assert(toHex("abcdefghijklmnopqrstuvw") == "40480ABA9D4F238E83BEB7EB1C54E9FF");
-    assert(toHex("abcdefghijklmnopqrstuvwx") == "6494960FD4DE2CF7790FCFA35321F208");
-    assert(toHex("abcdefghijklmnopqrstuvwxy") == "71E7CBA42F07960FEDEE1581399EBDDB");
-    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "749C9D7E516F4AA9E9AD9C89B6A7D529");
+    assert(toHex("a") == "897859F6655555855A890E51483AB5E6");
+    assert(toHex("ab") == "2E1BED16EA118B93ADD4529B01A75EE6");
+    assert(toHex("abc") == "6778AD3F3F3F96B4522DCA264174A23B");
+    assert(toHex("abcd") == "4FCD5646D6B77BB875E87360883E00F2");
+    assert(toHex("abcde") == "B8BB96F491D036208CECCF4BA0EEC7C5");
+    assert(toHex("abcdef") == "55BFA3ACBF867DE45C842133990971B0");
+    assert(toHex("abcdefg") == "99E49EC09F2FCDA6B6BB55B13AA23A1C");
+    assert(toHex("abcdefgh") == "028CEF37B00A8ACCA14069EB600D8948");
+    assert(toHex("abcdefghi") == "64793CF1CFC0470533E041B7F53DB579");
+    assert(toHex("abcdefghij") == "998C2F770D5BC1B6C91A658CDC854DA2");
+    assert(toHex("abcdefghijk") == "029D78DFB8D095A871E75A45E2317CBB");
+    assert(toHex("abcdefghijkl") == "94E17AE6B19BF38E1C62FF7232309E1F");
+    assert(toHex("abcdefghijklm") == "73FAC0A78D2848167FCCE70DFF7B652E");
+    assert(toHex("abcdefghijklmn") == "E075C3F5A794D09124336AD2276009EE");
+    assert(toHex("abcdefghijklmno") == "FB2F0C895124BE8A612A969C2D8C546A");
+    assert(toHex("abcdefghijklmnop") == "23B74C22A33CCAC41AEB31B395D63343");
+    assert(toHex("abcdefghijklmnopq") == "57A6BD887F746475E40D11A19D49DAEC");
+    assert(toHex("abcdefghijklmnopqr") == "508A7F90EC8CF0776BC7005A29A8D471");
+    assert(toHex("abcdefghijklmnopqrs") == "886D9EDE23BC901574946FB62A4D8AA6");
+    assert(toHex("abcdefghijklmnopqrst") == "F1E237F926370B314BD016572AF40996");
+    assert(toHex("abcdefghijklmnopqrstu") == "3CC9FF79E268D5C9FB3C9BE9C148CCD7");
+    assert(toHex("abcdefghijklmnopqrstuv") == "56F8ABF430E388956DA9F4A8741FDB46");
+    assert(toHex("abcdefghijklmnopqrstuvw") == "8E234F9DBA0A4840FFE9541CEBB7BE83");
+    assert(toHex("abcdefghijklmnopqrstuvwx") == "F72CDED40F96946408F22153A3CF0F79");
+    assert(toHex("abcdefghijklmnopqrstuvwxy") == "0F96072FA4CBE771DBBD9E398115EEED");
+    assert(toHex("abcdefghijklmnopqrstuvwxyz") == "A94A6F517E9D9C7429D5A7B6899CADE9");
 
     // Pushing pieces shorter than block size.
     auto hasher = MurmurHash3_x64_128();
     hasher.put(['a', 'b']);
     hasher.put(['c', 'd']);
-    assert(hasher.finish().toHex() == "B87BB7D64656CD4FF2003E886073E875");
+    assert(hasher.finish().toHex() == "4FCD5646D6B77BB875E87360883E00F2");
 }
 
 unittest
