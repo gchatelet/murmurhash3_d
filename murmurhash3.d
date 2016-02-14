@@ -1,13 +1,14 @@
 /**
-Computes MurmurHash3 hashes of arbitrary data. MurmurHash is a non-cryptographic
+Computes MurmurHash hashes of arbitrary data. MurmurHash is a non-cryptographic
 hash function suitable for general hash-based lookup.
-
-MurmurHash3 yields a 32-bit or 128-bit hash value.
 
 This module conforms to the APIs defined in $(D std.digest.digest).
 To understand the differences between the template and the OOP API, see $(D std.digest.digest).
 
 This module publicly imports $(D std.digest.digest) and can be used as a stand-alone module.
+
+Note: the current implementation is optimized for little endian architectures.
+It will exhibit different results on big endian architectures and a slightly less uniform distribution.
 
 License:   $(WEB www.boost.org/LICENSE_1_0.txt, Boost License 1.0).
 Authors: Guillaume Chatelet $(BR)
@@ -15,24 +16,82 @@ References:
   $(LINK2 https://code.google.com/p/smhasher/wiki/MurmurHash3, reference implementation)
   $(LINK2 https://en.wikipedia.org/wiki/MurmurHash, Wikipedia on MurmurHash)
 */
-//module std.digest.murmurhash3;
+//module std.digest.murmurhash;
 
 public import std.digest.digest;
 
 @safe:
 
+// Implements MurmurHash3_x86_32 $(D std.digest.digest) Template API.
 alias MurmurHash3_x86_32 = Piecewise!SMurmurHash3_x86_32;
+// Implements MurmurHash3_x86_128 $(D std.digest.digest) Template API.
 alias MurmurHash3_x86_128 = Piecewise!SMurmurHash3_x86_128;
+// Implements MurmurHash3_x64_128 $(D std.digest.digest) Template API.
 alias MurmurHash3_x64_128 = Piecewise!SMurmurHash3_x64_128;
 
+unittest
+{
+  static assert(isDigest!MurmurHash3_x86_32);
+  static assert(isDigest!MurmurHash3_x86_128);
+  static assert(isDigest!MurmurHash3_x64_128);
+}
+
+// Implements MurmurHash3_x86_32 $(D std.digest.digest.Digest) OOO API.
 alias MurmurHash3_x86_32Digest = WrapperDigest!MurmurHash3_x86_32;
+// Implements MurmurHash3_x86_128 $(D std.digest.digest.Digest) OOO API.
 alias MurmurHash3_x86_128Digest = WrapperDigest!MurmurHash3_x86_128;
+// Implements MurmurHash3_x64_128 $(D std.digest.digest.Digest) OOO API.
 alias MurmurHash3_x64_128Digest = WrapperDigest!MurmurHash3_x64_128;
 
+///
+unittest
+{
+    // Straightforward hash of typed array of data.
+    const(uint)[] data = [1, 2, 3, 4];
+    auto hashed = digest!MurmurHash3_x64_128(data);
+}
+
+///
+unittest
+{
+    // Hashing ubyte data piecewise.
+    const(ubyte)[] data1 = [1, 2, 3];
+    const(ubyte)[] data2 = [4, 5, 6, 7];
+    MurmurHash3_x64_128 hasher;
+    hasher.put(data1);
+    hasher.put(data2);
+    auto hashed = hasher.finish();
+}
+
+///
+unittest
+{
+    // Full control over which part of the algorithm to run.
+    // This allows for maximum throughput but needs extra care.
+
+    // Data type must be the same as the hasher's element type.
+    // i.e. SMurmurHash3_x86_32 takes array of uint
+    // i.e. MurmurHash3_x(86|64)_128 takes array of ulong[2]
+    const(uint)[] data = [1, 2, 3, 4];
+    // Note the hasher starts with S.
+    SMurmurHash3_x86_32 hasher;
+    // Push as many array of elements as you need.
+    // The less call the better performance wise.
+    hasher.putBlocks(data);
+    // Put remainder bytes if needed. This method can be called only once.
+    hasher.putRemainder(ubyte(1), ubyte(1), ubyte(1));
+    // Call finalize to incorporate data length in the hash.
+    hasher.finalize();
+    // Finally get the hashed value.
+    auto hashed = hasher.getBytes();
+}
+
 /**
-MurmurHash3 cannot put chunks smaller than Block.sizeof at a time. This struct
-stores remainder bytes in a buffer and pushes it as soon as the block is
+MurmurHash cannot put chunks smaller than Block.sizeof at a time.
+This struct stores remainder bytes in a buffer and pushes it when the block is
 complete or during finalization.
+
+Note: This is a helper struct and is not intended to be used directly.
 */
 struct Piecewise(Hasher)
 {
@@ -49,11 +108,18 @@ struct Piecewise(Hasher)
     size_t bufferSize;
     Hasher hasher;
 
+    // Initialize
     void start()
     {
         this = Piecewise.init;
     }
 
+    /**
+    Adds data to the digester. This function can be called many times in a row after start but before finish.
+
+    Note: Implementation uses pointer manipulation instead of foreach to avoid bounds checking (see @@@BUG@@@ 15581) making the function @trusted instead of @safe.
+    This function heavily affects the performance of hash calculation so make sure to benchmark all changes. Benchmark can be found at $(WEB https://github.com/gchatelet/murmurhash3d).
+    */
     void put(scope const(ubyte[]) data...) pure nothrow @trusted
     {
         // Buffer should never be full while entering this function.
@@ -90,6 +156,10 @@ struct Piecewise(Hasher)
         buffer.data[0 .. bufferSize] = end[0 .. bufferSize];
     }
 
+    /**
+    Finalizes the computation of the hash and returns the computed value.
+    Note that $(D finish) can be called only once and that no subsequent calls to $(D put) is allowed.
+    */
     ubyte[Block.sizeof] finish() pure nothrow
     {
         auto tail = getRemainder();
@@ -149,26 +219,42 @@ unittest
     assert(digester.getRemainder() == []);
 }
 
-void putBlocks(H, Block = H.Block)(ref H hash, scope const(Block[]) blocks...) pure nothrow @nogc @trusted
+// This definition of NO_UNALIGNED_ACCESS is too restrictive. Only a few old
+// SPARC/ARM chips cannot do unaligned reads.
+version(ARM)   { version = NO_UNALIGNED_ACCESS; }
+version(SPARC) { version = NO_UNALIGNED_ACCESS; }
+
+/**
+Pushes an array of blocks at once. It is more efficient to push as much data as possible in a single call.
+On platform that does not support unaligned reads (some old ARM chips), it is forbidden to pass non aligned data.
+
+Note: Implementation uses pointer manipulation instead of foreach to avoid
+bounds checking (see @@@BUG@@@ 15581) making the function @trusted instead of @safe.
+This function heavily affects the performance of hash calculation so make sure to benchmark all changes.
+Benchmark can be found at $(WEB https://github.com/gchatelet/murmurhash3d).
+*/
+void putBlocks(H, Block = H.Block)(ref H hasher, scope const(Block[]) blocks...) pure nothrow @nogc @trusted
 in
 {
-    assert(cast(size_t) blocks.ptr % Block.alignof == 0);
+    version(NO_UNALIGNED_ACCESS) assert(blocks.ptr % Block.alignof == 0);
 }
 body
 {
-    with (hash)
+    with (hasher)
     {
         const(Block)* start = blocks.ptr;
         const(Block*) end = blocks.ptr + blocks.length;
         for (; start < end; start++)
         {
-            Block aligned = *start;
-            putBlock(aligned);
+            putBlock(*start);
         }
         size += blocks.length * Block.sizeof;
     }
 }
 
+/**
+Returns the current hashed value as an ubyte array.
+*/
 auto getBytes(H)(ref H hash) pure nothrow @nogc
 {
     static if (is(H.Block == uint))
@@ -184,10 +270,8 @@ auto getBytes(H)(ref H hash) pure nothrow @nogc
 /**
 MurmurHash3 for x86 processors producing a 32 bits value.
 
-This is a lower level implementation that makes finalization optional and have
-slightly better performance.
-Note that $(D putRemainder) can be called only once and that no subsequent calls
-to putBlocks is allowed.
+This is a lower level implementation that makes finalization optional and have slightly better performance.
+Note that $(D putRemainder) can be called only once and that no subsequent calls to $9D putBlocks is allowed.
 */
 struct SMurmurHash3_x86_32
 {
@@ -275,17 +359,6 @@ version (unittest)
             assert(hasher.finish.toHexString() == expectedHash);
         }
     }
-}
-
-///
-unittest
-{
-    const(uint)[] data = [1, 2, 3, 4];
-    SMurmurHash3_x86_32 hasher;
-    hasher.putBlocks(data); // call many times if you need.
-    hasher.putRemainder( /* bytes */ ); // put remainder bytes if needed.
-    hasher.finalize(); // always finalize before calling get.
-    assert(hasher.get() == 1145416960);
 }
 
 unittest
