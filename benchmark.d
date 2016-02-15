@@ -35,7 +35,7 @@ void BaseLineHash(alias H)()
     consume(tmp);
 }
 
-import murmurhash3;
+import std.digest.murmurhash;
 
 void DHash(H)()
 {

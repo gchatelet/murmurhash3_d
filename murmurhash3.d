@@ -14,7 +14,7 @@ Authors: Guillaume Chatelet
 References: $(LINK2 https://code.google.com/p/smhasher/wiki/MurmurHash3, Reference implementation)
 $(BR) $(LINK2 https://en.wikipedia.org/wiki/MurmurHash, Wikipedia on MurmurHash)
 */
-//module std.digest.murmurhash;
+module std.digest.murmurhash;
 
 public import std.digest.digest;
 
@@ -618,12 +618,9 @@ remainder bytes in a buffer and pushes it when the block is complete or during
 finalization.
 */
 // Hasher is restricted to one of the SMurmurHash3_x??_?? because of
-// @@@BUG@@@ 15581 which forces the use of @system attribute on the put member
+// @@@BUG@@@ 15581 which forces the use of @trusted attribute on the put member
 // function.
-struct Piecewise(Hasher) if(
-  is(Hasher == SMurmurHash3_x86_32) ||
-  is(Hasher == SMurmurHash3_x86_128) ||
-  is(Hasher == SMurmurHash3_x64_128))
+struct Piecewise(Hasher) if(std.traits.moduleName!Hasher == "std.digest.murmurhash")
 {
     enum blockSize = bits!Block;
 
@@ -649,13 +646,14 @@ struct Piecewise(Hasher) if(
     after start but before finish.
     */
     // Implementation uses pointer manipulation instead of foreach to avoid
-    // bounds checking (see @@@BUG@@@ 15581), it also forces the use of the
-    // @system attribute.
+    // bounds checking (see @@@BUG@@@ 15581), it also forces us to use the
+    // @trusted attribute: the nested @trusted function trick is too costly and
+    // halves the throughput.
     // This function heavily affects the performance of hash calculation so
     // make sure to benchmark all changes. Benchmark can be found at
     // https://github.com/gchatelet/murmurhash3d.
     // TODO(gchatelet) revert to @safe and foreach when @@@BUG@@@ 15581 is fixed.
-    void put(scope const(ubyte[]) data...) pure nothrow @nogc @system
+    void put(scope const(ubyte[]) data...) pure nothrow @trusted
     {
         // Buffer should never be full while entering this function.
         assert(bufferSize < Block.sizeof);
