@@ -23,17 +23,17 @@ public import std.digest.digest;
 ///
 unittest
 {
-    // $(D MurmurHash3_x86_32), $(D MurmurHash3_x86_128) and
-    // $(D MurmurHash3_x64_128) implement $(D std.digest.digest) Template API.
+    // MurmurHash3_x86_32, MurmurHash3_x86_128 and MurmurHash3_x64_128 implement
+    // std.digest.digest Template API.
     static assert(isDigest!MurmurHash3_x86_32);
-    // The convenient $(D digest) template allows for quick hashing of data.
+    // The convenient digest template allows for quick hashing of data.
     auto hashed = digest!MurmurHash3_x86_32([1, 2, 3, 4]);
 }
 
 ///
 unittest
 {
-    // One can also hash $(D ubyte) data piecewise.
+    // One can also hash ubyte data piecewise.
     const(ubyte)[] data1 = [1, 2, 3];
     const(ubyte)[] data2 = [4, 5, 6, 7];
     MurmurHash3_x86_32 hasher;
@@ -45,14 +45,13 @@ unittest
 ///
 unittest
 {
-    // Using $(D SMurmurHash3_x86_32), $(D SMurmurHash3_x86_128) and
-    // $(D SMurmurHash3_x64_128) you gain full control over which part of the
-    // algorithm to run.
+    // Using SMurmurHash3_x86_32, SMurmurHash3_x86_128 and SMurmurHash3_x64_128
+    // you gain full control over which part of the algorithm to run.
     // This allows for maximum throughput but needs extra care.
 
     // Data type must be the same as the hasher's element type:
-    // - $(D uint) for SMurmurHash3_x86_32
-    // - $(D ulong[2]) for SMurmurHash3_x??_128
+    // - uint for SMurmurHash3_x86_32
+    // - ulong[2] for SMurmurHash3_x86_128 and SMurmurHash3_x64_128
     const(uint)[] data = [1, 2, 3, 4];
     // Note the hasher starts with S.
     SMurmurHash3_x86_32 hasher;
@@ -86,33 +85,39 @@ version(ARM)   { version = NO_UNALIGNED_ACCESS; }
 version(SPARC) { version = NO_UNALIGNED_ACCESS; }
 
 /**
-Pushes an array of blocks at once. It is more efficient to push as much data as possible in a single call.
-On platform that does not support unaligned reads (some old ARM chips), it is forbidden to pass non aligned data.
-
-Note: Implementation uses pointer manipulation instead of foreach to avoid
-bounds checking (see @@@BUG@@@ 15581) making the function @trusted instead of
-@safe.
-This function heavily affects the performance of hash calculation so make sure
-to benchmark all changes. Benchmark can be found on
-$(WEB https://github.com/gchatelet/murmurhash3d, github).
+Pushes an array of blocks at once. It is more efficient to push as much data as
+possible in a single call.
+On platform that does not support unaligned reads (some old ARM chips), it is
+forbidden to pass non aligned data.
 */
-void putBlocks(H, Block = H.Block)(ref H hasher, scope const(Block[]) blocks...) pure nothrow @nogc @trusted
+void putBlocks(H, Block = H.Block)(ref H hasher, scope const(Block[]) blocks...) pure nothrow @nogc
 in
 {
     version(NO_UNALIGNED_ACCESS) assert(blocks.ptr % Block.alignof == 0);
 }
 body
 {
-    with (hasher)
+    // Implementation uses pointer manipulation instead of foreach to avoid
+    // bounds checking (see @@@BUG@@@ 15581), it also forces the use of an inner
+    // function to restrict the scope of @trusted to a minimum.
+    // This function heavily affects the performance of hash calculation so make
+    // sure to benchmark all changes. Benchmark can be found at
+    // https://github.com/gchatelet/murmurhash3d.
+    // TODO(gchatelet) revert to @safe and foreach when @@@BUG@@@ 15581 is fixed.
+    scope auto putBlockTrusted = (ref H hasher, scope const(Block[]) blocks...) pure nothrow @nogc @trusted
     {
-        const(Block)* start = blocks.ptr;
-        const(Block*) end = blocks.ptr + blocks.length;
-        for (; start < end; start++)
+        with (hasher)
         {
-            putBlock(*start);
+            const(Block)* start = blocks.ptr;
+            const(Block*) end = blocks.ptr + blocks.length;
+            for (; start < end; start++)
+            {
+                putBlock(*start);
+            }
+            size += blocks.length * Block.sizeof;
         }
-        size += blocks.length * Block.sizeof;
-    }
+    };
+    putBlockTrusted(hasher, blocks);
 }
 
 /**
@@ -144,7 +149,7 @@ private:
     uint h1;
 
 public:
-    alias Block = uint;
+    alias Block = uint; /// The element size for x86_32 implementation.
     size_t size;
 
     this(uint seed)
@@ -154,11 +159,14 @@ public:
 
     @disable this(this);
 
+    /// Adds a single Block of data without increasing size.
+    /// Make sure to increase size by Block.sizeof for each call to putBlock.
     void putBlock(uint block) pure nothrow @nogc
     {
         update(h1, block, 0, c1, c2, 15, 13, 0xe6546b64);
     }
 
+    /// Put remainder bytes. This must be called only once after putBlock and before finalize.
     void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
     {
         assert(data.length < Block.sizeof);
@@ -181,13 +189,15 @@ public:
         }
     }
 
+    /// Incorporate size and finalizes the hash.
     void finalize() pure nothrow @nogc
     {
         h1 ^= size;
         h1 = fmix(h1);
     }
 
-    int get() pure nothrow @nogc
+    /// returns the hash as an uint value.
+    Block get() pure nothrow @nogc
     {
         return h1;
     }
@@ -272,7 +282,7 @@ private:
     uint h4, h3, h2, h1;
 
 public:
-    alias Block = uint[4];
+    alias Block = uint[4]; /// The element size for x86_128 implementation.
     size_t size;
 
     this(uint seed4, uint seed3, uint seed2, uint seed1)
@@ -290,6 +300,8 @@ public:
 
     @disable this(this);
 
+    /// Adds a single Block of data without increasing size.
+    /// Make sure to increase size by Block.sizeof for each call to putBlock.
     void putBlock(Block block) pure nothrow @nogc
     {
         update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
@@ -298,6 +310,7 @@ public:
         update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
     }
 
+    /// Put remainder bytes. This must be called only once after putBlock and before finalize.
     void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
     {
         assert(data.length < Block.sizeof);
@@ -363,6 +376,7 @@ public:
         }
     }
 
+    /// Incorporate size and finalizes the hash.
     void finalize() pure nothrow @nogc
     {
         h1 ^= size;
@@ -390,6 +404,7 @@ public:
         h4 += h1;
     }
 
+    /// returns the hash as an uint[4] value.
     Block get() pure nothrow @nogc
     {
         return [h1, h2, h3, h4];
@@ -442,7 +457,7 @@ private:
     ulong h2, h1;
 
 public:
-    alias Block = ulong[2];
+    alias Block = ulong[2]; /// The element size for x64_128 implementation.
     size_t size;
 
     this(ulong seed)
@@ -458,12 +473,15 @@ public:
 
     @disable this(this);
 
+    /// Adds a single Block of data without increasing size.
+    /// Make sure to increase size by Block.sizeof for each call to putBlock.
     void putBlock(Block block) pure nothrow @nogc
     {
         update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
         update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
     }
 
+    /// Put remainder bytes. This must be called only once after putBlock and before finalize.
     void putRemainder(scope const(ubyte[]) data...) pure nothrow @nogc
     {
         assert(data.length < Block.sizeof);
@@ -524,6 +542,7 @@ public:
         }
     }
 
+    /// Incorporate size and finalizes the hash.
     void finalize() pure nothrow @nogc
     {
         h1 ^= size;
@@ -537,6 +556,7 @@ public:
         h2 += h1;
     }
 
+    /// returns the hash as an ulong[2] value.
     Block get() pure nothrow @nogc
     {
         return [h1, h2];
@@ -597,7 +617,13 @@ cannot put chunks smaller than Block.sizeof at a time. This struct stores
 remainder bytes in a buffer and pushes it when the block is complete or during
 finalization.
 */
-struct Piecewise(Hasher)
+// Hasher is restricted to one of the SMurmurHash3_x??_?? because of
+// @@@BUG@@@ 15581 which forces the use of @system attribute on the put member
+// function.
+struct Piecewise(Hasher) if(
+  is(Hasher == SMurmurHash3_x86_32) ||
+  is(Hasher == SMurmurHash3_x86_128) ||
+  is(Hasher == SMurmurHash3_x64_128))
 {
     enum blockSize = bits!Block;
 
@@ -621,15 +647,15 @@ struct Piecewise(Hasher)
     /**
     Adds data to the digester. This function can be called many times in a row
     after start but before finish.
-
-    Note: Implementation uses pointer manipulation instead of foreach to avoid
-    bounds checking (see @@@BUG@@@ 15581) making the function @trusted instead of
-    @safe.
-    This function heavily affects the performance of hash calculation so make sure
-    to benchmark all changes. Benchmark can be found on
-    $(WEB https://github.com/gchatelet/murmurhash3d, github).
     */
-    void put(scope const(ubyte[]) data...) pure nothrow @trusted
+    // Implementation uses pointer manipulation instead of foreach to avoid
+    // bounds checking (see @@@BUG@@@ 15581), it also forces the use of the
+    // @system attribute.
+    // This function heavily affects the performance of hash calculation so
+    // make sure to benchmark all changes. Benchmark can be found at
+    // https://github.com/gchatelet/murmurhash3d.
+    // TODO(gchatelet) revert to @safe and foreach when @@@BUG@@@ 15581 is fixed.
+    void put(scope const(ubyte[]) data...) pure nothrow @nogc @system
     {
         // Buffer should never be full while entering this function.
         assert(bufferSize < Block.sizeof);
@@ -667,7 +693,8 @@ struct Piecewise(Hasher)
 
     /**
     Finalizes the computation of the hash and returns the computed value.
-    Note that $(D finish) can be called only once and that no subsequent calls to $(D put) is allowed.
+    Note that $(D finish) can be called only once and that no subsequent calls
+    to $(D put) is allowed.
     */
     ubyte[Block.sizeof] finish() pure nothrow
     {
