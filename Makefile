@@ -10,7 +10,7 @@ $(BUILD_DIR)/gdc_benchmark: benchmark.d murmurhash3.d $(BUILD_DIR)/CMurmurHash3_
 	gdc -O3 -frelease -Wall -Werror $^ -o$@
 
 $(BUILD_DIR)/ldc_benchmark: benchmark.d murmurhash3.d $(BUILD_DIR)/CMurmurHash3_clang.o
-	ldc2 -O3 -release -inline $^ -of$@
+	ldc2 -O3 -release $^ -of$@
 
 $(BUILD_DIR)/dmd_benchmark: benchmark.d murmurhash3.d $(BUILD_DIR)/CMurmurHash3_g++.o
 	dmd -O -release -inline $^ -of$@

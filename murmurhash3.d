@@ -163,7 +163,7 @@ public:
     /// Make sure to increase size by Block.sizeof for each call to putBlock.
     void putBlock(uint block) pure nothrow @nogc
     {
-        update(h1, block, 0, c1, c2, 15, 13, 0xe6546b64);
+        h1 = update(h1, block, 0, c1, c2, 15, 13, 0xe6546b64U);
     }
 
     /// Put remainder bytes. This must be called only once after putBlock and before finalize.
@@ -304,10 +304,10 @@ public:
     /// Make sure to increase size by Block.sizeof for each call to putBlock.
     void putBlock(Block block) pure nothrow @nogc
     {
-        update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1b);
-        update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747);
-        update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35);
-        update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17);
+        h1 = update(h1, block[0], h2, c1, c2, 15, 19, 0x561ccd1bU);
+        h2 = update(h2, block[1], h3, c2, c3, 16, 17, 0x0bcaa747U);
+        h3 = update(h3, block[2], h4, c3, c4, 17, 15, 0x96cd1c35U);
+        h4 = update(h4, block[3], h1, c4, c1, 18, 13, 0x32ac3b17U);
     }
 
     /// Put remainder bytes. This must be called only once after putBlock and before finalize.
@@ -477,8 +477,8 @@ public:
     /// Make sure to increase size by Block.sizeof for each call to putBlock.
     void putBlock(Block block) pure nothrow @nogc
     {
-        update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729);
-        update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5);
+        h1 = update(h1, block[0], h2, c1, c2, 31, 27, 0x52dce729U);
+        h2 = update(h2, block[1], h1, c2, c1, 33, 31, 0x38495ab5U);
     }
 
     /// Put remainder bytes. This must be called only once after putBlock and before finalize.
@@ -611,6 +611,8 @@ unittest
     testUnalignedHash!MurmurHash3_x64_128();
 }
 
+import std.traits : moduleName;
+
 /**
 This is a helper struct and is not intended to be used directly. MurmurHash
 cannot put chunks smaller than Block.sizeof at a time. This struct stores
@@ -620,7 +622,7 @@ finalization.
 // Hasher is restricted to one of the SMurmurHash3_x??_?? because of
 // @@@BUG@@@ 15581 which forces the use of @trusted attribute on the put member
 // function.
-struct Piecewise(Hasher) if(std.traits.moduleName!Hasher == "std.digest.murmurhash")
+struct Piecewise(Hasher) if(moduleName!Hasher == "std.digest.murmurhash")
 {
     enum blockSize = bits!Block;
 
@@ -783,7 +785,7 @@ T shuffle(T)(T k, T c1, T c2, ubyte r1)
     return k;
 }
 
-void update(T)(ref T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
+T update(T)(T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
 {
     import std.traits : isUnsigned;
 
@@ -791,7 +793,7 @@ void update(T)(ref T h, T k, T mixWith, T c1, T c2, ubyte r1, ubyte r2, T n)
     h ^= shuffle(k, c1, c2, r1);
     h = rotl(h, r2);
     h += mixWith;
-    h = h * 5 + n;
+    return h * 5 + n;
 }
 
 uint fmix(uint h) pure nothrow @nogc
