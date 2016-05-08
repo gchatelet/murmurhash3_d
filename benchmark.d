@@ -1,5 +1,7 @@
 import std.stdio;
 
+import std.digest.murmurhash;
+
 extern (C++)
 {
     void MurmurHash3_x86_32(const(void*) key, int len, uint seed, void* out_);
@@ -35,8 +37,6 @@ void BaseLineHash(alias H)()
     consume(tmp);
 }
 
-import std.digest.murmurhash;
-
 void DHash(H)()
 {
     H hasher;
@@ -53,13 +53,12 @@ void DDigest(H)()
 void doBenchmark(string suffix)()
 {
     import std.datetime : benchmark;
-    import std.algorithm : reduce, min;
 
     const descriptions = ["C++", "D", "D digest"];
     auto results = benchmark!(
         mixin("BaseLineHash!(.MurmurHash3_" ~ suffix ~ ")"),
-        mixin("DHash!SMurmurHash3_" ~ suffix),
-        mixin("DDigest!SMurmurHash3_" ~ suffix))(_EXECUTION_COUNT);
+        mixin("DHash!FastMurmurHash3_" ~ suffix),
+        mixin("DDigest!FastMurmurHash3_" ~ suffix))(_EXECUTION_COUNT);
     const baseline = results[0];
     foreach (i, result; results)
     {
