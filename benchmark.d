@@ -40,29 +40,29 @@ void BaseLineHash(alias H)()
 void DHash(H)()
 {
     H hasher;
-    hasher.putBlocks(cast(const(H.Block)[]) buffer);
+    hasher.putElements(cast(const(H.Element)[]) buffer);
     hasher.finalize();
     consume(hasher.getBytes());
 }
 
 void DDigest(H)()
 {
-    consume(digest!(Piecewise!H)(buffer));
+    consume(digest!H(buffer));
 }
 
-void doBenchmark(string suffix)()
+void doBenchmark(string suffix_cpp, string suffix_d)()
 {
     import std.datetime : benchmark;
 
     const descriptions = ["C++", "D", "D digest"];
     auto results = benchmark!(
-        mixin("BaseLineHash!(.MurmurHash3_" ~ suffix ~ ")"),
-        mixin("DHash!FastMurmurHash3_" ~ suffix),
-        mixin("DDigest!FastMurmurHash3_" ~ suffix))(_EXECUTION_COUNT);
+        mixin("BaseLineHash!(.MurmurHash3_" ~ suffix_cpp ~ ")"),
+        mixin("DHash!(std.digest.murmurhash.MurmurHash3!" ~ suffix_d ~ ")"),
+        mixin("DDigest!(std.digest.murmurhash.MurmurHash3!" ~ suffix_d ~ ")"))(_EXECUTION_COUNT);
     const baseline = results[0];
     foreach (i, result; results)
     {
-        writefln("%-20s - %3d%% - %.2f GiB/s", suffix ~ " " ~ descriptions[i],
+        writefln("%-20s - %3d%% - %.2f GiB/s", suffix_cpp ~ " " ~ descriptions[i],
             100 * baseline.msecs / result.msecs, _EXECUTION_COUNT * 1000. / result.usecs);
     }
     writeln();
@@ -74,7 +74,7 @@ void main()
     buffer[] = 0xAC;
     writeln("Please wait while benchmarking MurmurHash3, running ",
         _EXECUTION_COUNT, "*hash(256KiB) = 1GiB");
-    doBenchmark!"x64_128"();
-    doBenchmark!"x86_128"();
-    doBenchmark!"x86_32"();
+    doBenchmark!("x64_128","(128,64)")();
+    doBenchmark!("x86_128","(128,32)")();
+    doBenchmark!("x86_32","(32)")();
 }
